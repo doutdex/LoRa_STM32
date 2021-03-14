@@ -53,15 +53,57 @@
 #include "tiny_sscanf.h"
 #include "flash_eraseprogram.h"
 #include "version.h"
+#include "stdlib.h"
 
+#if defined( REGION_AS923 )
+#define Firm_FQ 0x0001
+#elif defined( REGION_AU915 )
+#define Firm_FQ 0x0002
+#elif defined( REGION_CN470 )
+#define Firm_FQ 0x0003
+#elif defined( REGION_CN779 )
+#define Firm_FQ 0x0004
+#elif defined( REGION_EU433 )
+#define Firm_FQ 0x0005
+#elif defined( REGION_EU868 )
+#define Firm_FQ 0x0006
+#elif defined( REGION_IN865 )
+#define Firm_FQ 0x0007
+#elif defined( REGION_KR920 )
+#define Firm_FQ 0x0008
+#elif defined( REGION_KZ865 )
+#define Firm_FQ 0x0009	
+#elif defined( REGION_RU864 )
+#define Firm_FQ 0x000a
+#elif defined( REGION_US915 )
+#define Firm_FQ 0x000b
+#endif
+
+uint16_t fire_version=0;
+uint16_t fire_frequcy=0;
 uint8_t mode;
 uint8_t inmode;
+uint8_t joinrx2_dr;
+bool rx2_flags=0;
+bool fdr_flags=0;
 
+extern float GapValue;
+extern uint8_t dwelltime;
 extern uint8_t symbtime1_value;
 extern uint8_t flag1;
 
 extern uint8_t symbtime2_value;
 extern uint8_t flag2;
+extern uint8_t rx_flags;
+extern uint32_t rx1_de,rx2_de;
+
+extern uint16_t REJOIN_TX_DUTYCYCLE;
+extern uint8_t response_level;
+extern bool rejoin_status;
+extern bool JoinReq_NbTrails_over;
+extern bool unconfirmed_downlink_data_ans_status,confirmed_downlink_data_ans_status;
+
+extern uint16_t power_time;
 
 static uint8_t config_count=0;
 static uint8_t key_count=0;
@@ -167,9 +209,9 @@ static lora_configuration_t lora_config =
  */
 #define LORAWAN_DUTYCYCLE_ON                        true
 
-#define USE_SEMTECH_DEFAULT_CHANNEL_LINEUP          0
+//#define USE_SEMTECH_DEFAULT_CHANNEL_LINEUP          0
 
-#if( USE_SEMTECH_DEFAULT_CHANNEL_LINEUP == 1 ) 
+//#if( USE_SEMTECH_DEFAULT_CHANNEL_LINEUP == 1 ) 
 
 #define LC4                { 867100000, 0, { ( ( DR_5 << 4 ) | DR_0 ) }, 0 }
 #define LC5                { 867300000, 0, { ( ( DR_5 << 4 ) | DR_0 ) }, 0 }
@@ -179,7 +221,7 @@ static lora_configuration_t lora_config =
 #define LC9                { 868800000, 0, { ( ( DR_7 << 4 ) | DR_7 ) }, 2 }
 #define LC10               { 868300000, 0, { ( ( DR_6 << 4 ) | DR_6 ) }, 1 }
 
-#endif
+//#endif
 
 #endif
 
@@ -242,7 +284,11 @@ static void McpsConfirm( McpsConfirm_t *mcpsConfirm )
 static void McpsIndication( McpsIndication_t *mcpsIndication )
 {
   lora_AppData_t AppData;
-  
+
+	rejoin_status=0;
+	unconfirmed_downlink_data_ans_status=0;
+	confirmed_downlink_data_ans_status=0;  
+	  
     if( mcpsIndication->Status != LORAMAC_EVENT_INFO_STATUS_OK )
     {
         return;
@@ -292,7 +338,16 @@ static void McpsIndication( McpsIndication_t *mcpsIndication )
           certif_rx( mcpsIndication, &JoinParameters );
           break;
         default:
-          
+
+				  if(mcpsIndication->McpsIndication==MCPS_UNCONFIRMED && response_level==1)
+					{
+						unconfirmed_downlink_data_ans_status=1;
+					}
+					else if(mcpsIndication->McpsIndication==MCPS_CONFIRMED && ((response_level==2)||(response_level==4)))
+					{
+						confirmed_downlink_data_ans_status=1;
+					}
+					
           AppData.Port = mcpsIndication->Port;
           AppData.BuffSize = mcpsIndication->BufferSize;
           AppData.Buff = mcpsIndication->Buffer;
@@ -324,7 +379,7 @@ static void MlmeConfirm( MlmeConfirm_t *mlmeConfirm )
             else
             {
                 // Join was not successful. Try to join again
-                LORA_Join();
+                JoinReq_NbTrails_over=1;
             }
             break;
         }
@@ -378,6 +433,7 @@ void LORA_Init (LoRaMainCallback_t *callbacks, LoRaParam_t* LoRaParam )
 	#endif
 	
 	PRINTF("Image Version: "AT_VERSION_STRING"\n\r");
+	PRINTF("LoRaWan Stack: "AT_LoRaWan_VERSION_STRING"\n\r");	
 	PRINTF("Frequency Band: ");
 	region_printf();
 	key_printf();
@@ -407,8 +463,10 @@ void LORA_Init (LoRaMainCallback_t *callbacks, LoRaParam_t* LoRaParam )
   LoRaMacInitialization( &LoRaMacPrimitives, &LoRaMacCallbacks, LORAMAC_REGION_KR920 );
 #elif defined( REGION_US915 )
   LoRaMacInitialization( &LoRaMacPrimitives, &LoRaMacCallbacks, LORAMAC_REGION_US915 );
-#elif defined( REGION_US915_HYBRID )
-  LoRaMacInitialization( &LoRaMacPrimitives, &LoRaMacCallbacks, LORAMAC_REGION_US915_HYBRID );
+#elif defined( REGION_RU864 )
+  LoRaMacInitialization( &LoRaMacPrimitives, &LoRaMacCallbacks, LORAMAC_REGION_RU864 );
+#elif defined( REGION_KZ865 )
+  LoRaMacInitialization( &LoRaMacPrimitives, &LoRaMacCallbacks, LORAMAC_REGION_KZ865 );			
 #else
     #error "Please define a region in the compiler options."
 #endif
@@ -425,48 +483,60 @@ void LORA_Init (LoRaMainCallback_t *callbacks, LoRaParam_t* LoRaParam )
   mibReq.Param.Class= CLASS_A;
   LoRaMacMibSetRequestConfirm( &mibReq );
 
-#if defined( REGION_EU868 )
-  LoRaMacTestSetDutyCycleOn( lora_config.duty_cycle );
-
-#if( USE_SEMTECH_DEFAULT_CHANNEL_LINEUP == 1 )
-  LoRaMacChannelAdd( 3, ( ChannelParams_t )LC4 );
-  LoRaMacChannelAdd( 4, ( ChannelParams_t )LC5 );
-  LoRaMacChannelAdd( 5, ( ChannelParams_t )LC6 );
-  LoRaMacChannelAdd( 6, ( ChannelParams_t )LC7 );
-  LoRaMacChannelAdd( 7, ( ChannelParams_t )LC8 );
-  LoRaMacChannelAdd( 8, ( ChannelParams_t )LC9 );
-  LoRaMacChannelAdd( 9, ( ChannelParams_t )LC10 );
-
-  mibReq.Type = MIB_RX2_DEFAULT_CHANNEL;
-  mibReq.Param.Rx2DefaultChannel = ( Rx2ChannelParams_t ){ 869525000, DR_3 };
-  LoRaMacMibSetRequestConfirm( &mibReq );
-
-  mibReq.Type = MIB_RX2_CHANNEL;
-  mibReq.Param.Rx2Channel = ( Rx2ChannelParams_t ){ 869525000, DR_3 };
-  LoRaMacMibSetRequestConfirm( &mibReq );
-#endif
-#endif
   lora_config.TxDatarate = LoRaParamInit->TxDatarate;
 	
 	  if(FLASH_read(0x8018F80)==0x00)	//page799
-			{
-				lora_config.duty_cycle = LORA_DISABLE;
-	      lora_config.application_port=2;
-	
-				mode=1;			
-				inmode=2;					
-				APP_TX_DUTYCYCLE=30000;
+		{
+			fdr_config();
+			FLASH_program_on_addr(0x8018F80,0x11);		
+      PRINTF("Please set the parameters or reset Device to apply change\n\r");				
+		}
+		else if(FLASH_read(0x8018F80)==0x12)
+		{
+			fdr_config();			
+			FLASH_erase(0x8018F80);//page 799					
+			FLASH_program_on_addr(0x8018F80,0x11);	
+			NVIC_SystemReset();			
+		}
+    else 
+		{					
+			Read_Config();
+			LORA_Join();
+		}
+}
+
+void fdr_config(void)
+{
+	lora_config.duty_cycle = LORA_DISABLE;
+	lora_config.application_port=2;
 				
-				Store_Config();
-				Read_Config();
-				FLASH_program_on_addr(0x8018F80,0x11);		
-        PRINTF("Please set the parameters or reset Device to apply change\n\r");				
-			}
-      else 
-			{					
-				Read_Config();
-				LORA_Join();
-			}
+  #if defined( REGION_CN470 )	
+		  customize_config.set8channel = 11;
+  #endif
+				
+	#if defined( REGION_AS923 )	|| defined( REGION_AU915 )
+		  dwelltime=1;
+	#endif
+
+	#if defined( REGION_EU868 )	
+		  mibReq.Type = MIB_RX2_DEFAULT_CHANNEL;
+			mibReq.Param.Rx2DefaultChannel = ( Rx2ChannelParams_t ){ 869525000, DR_3 };
+			LoRaMacMibSetRequestConfirm( &mibReq );
+
+			mibReq.Type = MIB_RX2_CHANNEL;
+			mibReq.Param.Rx2Channel = ( Rx2ChannelParams_t ){ 869525000, DR_3 };
+			LoRaMacMibSetRequestConfirm( &mibReq );
+	#endif	
+				
+	mode=1;			
+	inmode=2;					
+	APP_TX_DUTYCYCLE=300000;
+	REJOIN_TX_DUTYCYCLE=20;//min	
+	GapValue=400.0;
+
+	fdr_flags=1;	
+	Store_Config();
+	Read_Config();	
 }
 
 void region_printf(void)
@@ -489,6 +559,10 @@ void region_printf(void)
   PPRINTF("KR920\n\r");
 #elif defined( REGION_US915 )
   PPRINTF("US915\n\r");
+#elif defined( REGION_RU864 )
+  PPRINTF("RU864\n\r");
+#elif defined( REGION_KZ865 )
+  PPRINTF("KZ865\n\r");			
 #else
     #error "Please define a region in the compiler options."
 #endif
@@ -721,7 +795,17 @@ void lora_config_devaddr_set(uint32_t devaddr)
 
 void lora_config_devaddr_get()
 {
-	PRINTF("%08X\n\r", lora_config.DevAddr);
+	uint8_t daddr[4];
+	daddr[0]=(lora_config.DevAddr>>24)&0xff;
+	daddr[1]=(lora_config.DevAddr>>16)&0xff;
+	daddr[2]=(lora_config.DevAddr>>8)&0xff;
+	daddr[3]= lora_config.DevAddr&0xff;
+	
+	for(int i=0;i<4;i++)
+	{
+		PPRINTF("%02x ",daddr[i]);
+	}
+	PPRINTF("\r\n");
 }
 
 void lora_config_nwkskey_set(uint8_t nwkskey[16])
@@ -964,7 +1048,7 @@ void Store_Config(void)
 	if(status!=LORAMAC_STATUS_OK)
 	{PRINTF("LORAMAC STATUS ERROR\n\r");}
 	s_config[config_count++]=mib.Param.Rx2Channel.Datarate;
-	
+
 	mib.Type = MIB_RECEIVE_DELAY_1;
   status = LoRaMacMibGetRequestConfirm(&mib);
 	if(status!=LORAMAC_STATUS_OK)
@@ -997,23 +1081,17 @@ void Store_Config(void)
 	
 	s_config[config_count++]=APP_TX_DUTYCYCLE;
 	
-	s_config[config_count++]=lora_config.application_port;
+	s_config[config_count++]=(dwelltime<<8)|lora_config.application_port;
 	
 	s_config[config_count++]=customize_config.freq1;
 	
-	s_config[config_count++]=customize_config.set8channel;
+	s_config[config_count++]=(REJOIN_TX_DUTYCYCLE<<16)|(response_level<<8)|customize_config.set8channel;
 	
-	s_config[config_count++]=symbtime1_value;
-	
-	s_config[config_count++]=flag1;
-	
-	s_config[config_count++]=symbtime2_value;
-	
-	s_config[config_count++]=flag2;
+	s_config[config_count++]=(symbtime1_value<<24)|(flag1<<16)|(symbtime2_value<<8)| flag2;
 
-	s_config[config_count++]=mode;
+	s_config[config_count++]=(mode<<24)|(inmode<<16)|power_time;
 
-	s_config[config_count++]=inmode;
+	s_config[config_count++]=GapValue*10;
 	
 	FLASH_erase(FLASH_USER_START_ADDR_CONFIG);//Page800 
 	FLASH_program(FLASH_USER_START_ADDR_CONFIG,s_config,config_count);//store config
@@ -1023,7 +1101,7 @@ void Store_Config(void)
 
 void Read_Config(void)
 {
-	uint32_t star_address=0,r_config[19],r_key[17];
+	uint32_t star_address=0,r_config[16],r_key[17];
 	
 	star_address=FLASH_USER_START_ADDR_KEY;
 	/* read key*/
@@ -1042,7 +1120,7 @@ void Read_Config(void)
 	
 	
 	star_address=FLASH_USER_START_ADDR_CONFIG;
-	for(int i=0;i<19;i++)
+	for(int i=0;i<16;i++)
 	{
 	  r_config[i]=FLASH_read(star_address);
 		star_address+=4;
@@ -1089,17 +1167,45 @@ void Read_Config(void)
 	mib.Param.Rx2Channel.Frequency=r_config[2];
 	LoRaMacMibSetRequestConfirm( &mib );
 	
+  if((rx2_flags==0)||(lora_config.otaa==LORA_DISABLE))
+  {		
 	mib.Type = MIB_RX2_CHANNEL;
 	mib.Param.Rx2Channel.Datarate=r_config[3];
+	joinrx2_dr=r_config[3];				
 	LoRaMacMibSetRequestConfirm( &mib );
+  }
+  else if(rx2_flags==1)
+	{
+	mib.Type = MIB_RX2_CHANNEL;
+	mib.Param.Rx2Channel.Datarate=rx_flags;
+	LoRaMacMibSetRequestConfirm( &mib );
+	}
 	
+  if((rx2_flags==0)||(lora_config.otaa==LORA_DISABLE))
+  {		
 	mib.Type = MIB_RECEIVE_DELAY_1;
 	mib.Param.ReceiveDelay1=r_config[4];
 	LoRaMacMibSetRequestConfirm( &mib );
-	
+  }
+  else if(rx2_flags==1)
+	{
+	mib.Type = MIB_RECEIVE_DELAY_1;
+	mib.Param.ReceiveDelay1=rx1_de;
+	LoRaMacMibSetRequestConfirm( &mib );		
+  }
+
+  if((rx2_flags==0)||(lora_config.otaa==LORA_DISABLE))
+  {			
 	mib.Type = MIB_RECEIVE_DELAY_2;
 	mib.Param.ReceiveDelay2=r_config[5];
 	LoRaMacMibSetRequestConfirm( &mib );
+  }
+  else if(rx2_flags==1)
+	{
+	mib.Type = MIB_RECEIVE_DELAY_2;
+	mib.Param.ReceiveDelay2=rx2_de;
+	LoRaMacMibSetRequestConfirm( &mib );		
+  }
 	
 	mib.Type = MIB_JOIN_ACCEPT_DELAY_1;
 	mib.Param.JoinAcceptDelay1=r_config[6];
@@ -1114,48 +1220,76 @@ void Read_Config(void)
 	LoRaMacMibSetRequestConfirm( &mib );
 	
 	APP_TX_DUTYCYCLE=r_config[9];
+
+	dwelltime=(r_config[10]>>8)&0xFF;
 	
-	lora_config.application_port=r_config[10];
+	lora_config.application_port=r_config[10]&0xFF;
 	
 	customize_config.freq1=r_config[11];
+
+	REJOIN_TX_DUTYCYCLE=(r_config[12]>>16)&0xFFFF;
 	
-	customize_config.set8channel=r_config[12];
+	response_level=(r_config[12]>>8)&0xFF;
 	
-	symbtime1_value=r_config[13];
+	customize_config.set8channel=r_config[12]&0xFF;
 	
-	flag1=r_config[14];
+	symbtime1_value=(r_config[13]>>24)&0xFF;
 	
-	symbtime2_value=r_config[15];
+	flag1=(r_config[13]>>16)&0xFF;
 	
-	flag2=r_config[16];
+	symbtime2_value=(r_config[13]>>8)&0xFF;
 	
-	mode=r_config[17];
+	flag2=r_config[13]&0xFF;
 	
-	inmode=r_config[18];	
+	mode=(r_config[14]>>24)&0xFF;
+	
+	inmode=(r_config[14]>>16)&0xFF;	
+
+	power_time=(r_config[14])&0xFFFF;	
+	
+	GapValue=(float)(r_config[15]/10);
 }
 
-/* Dummy data sent periodically to let the tester respond with start test command*/
-//static TimerEvent_t TxcertifTimer;
+uint16_t string_touint(void)
+{
+	char *p;	
+	uint8_t chanum=0;	
+	uint16_t versi;
+	char version[8]="";
+	p=AT_VERSION_STRING;
+	
+	while(*p++!='\0')
+	{
+  if(*p>='0'&&*p<='9')
+   {
+		 version[chanum++]=*p;
+	 }		 
+	}
+	versi=atoi(version);
+	
+	return versi;
+}
 
-//void OnCertifTimer( void)
-//{
-//  uint8_t Dummy[1]= {1};
-//  lora_AppData_t AppData;
-//  AppData.Buff=Dummy;
-//  AppData.BuffSize=sizeof(Dummy);
-//  AppData.Port = 224;
+void new_firmware_update(void)
+{
+	uint32_t update_flags[1];
+	uint16_t be_fre,be_ver;
+	uint32_t start_address=0,r_config[1];
+	start_address=EEPROM_USER_Firmware_FLAGS;
+	r_config[0]=*(__IO uint32_t *)start_address;
+	be_fre=r_config[0]>>16;
+	be_ver=r_config[0]&0xFFFF;		
+	fire_frequcy=Firm_FQ;
+	fire_version=string_touint();
 
-//  LORA_send( &AppData, LORAWAN_UNCONFIRMED_MSG);
-//}
-
-//void lora_wan_certif( void )
-//{
-//  LORA_Join( );
-//  TimerInit( &TxcertifTimer,  OnCertifTimer); /* 5s */
-//  TimerSetValue( &TxcertifTimer,  5000); /* 5s */
-//  TimerStart( &TxcertifTimer );
-
-//}
-
+  if((be_fre!=fire_frequcy)||(be_ver!=fire_version))  //FDR
+	{		
+		update_flags[0]=(fire_frequcy<<16)| fire_version;
+		EEPROM_program(EEPROM_USER_Firmware_FLAGS,update_flags,1);//store hardversion
+		FLASH_erase(0x8018F80);//page 799
+		FLASH_erase(FLASH_USER_START_ADDR_CONFIG);
+		NVIC_SystemReset();		
+	}		
+}
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
 

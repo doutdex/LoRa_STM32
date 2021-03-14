@@ -31,8 +31,8 @@ Maintainer: Miguel Luis ( Semtech ), Gregory Cristian ( Semtech ) and Daniel Jae
 
 
 #define BACKOFF_DC_1_HOUR       100
-#define BACKOFF_DC_10_HOURS     1000
-#define BACKOFF_DC_24_HOURS     10000
+#define BACKOFF_DC_10_HOURS     100
+#define BACKOFF_DC_24_HOURS     100
 
 
 
@@ -374,3 +374,31 @@ void RegionCommonCalcBackOff( RegionCommonCalcBackOffParams_t* calcBackOffParams
         }
     }
 }
+
+//void RegionCommonRxBeaconSetup( RegionCommonRxBeaconSetupParams_t* rxBeaconSetupParams )
+//{
+//    bool rxContinuous = true;
+//    uint8_t datarate;
+
+//    // Set the radio into sleep mode
+//    Radio.Sleep( );
+
+//    // Setup frequency and payload length
+//    Radio.SetChannel( rxBeaconSetupParams->Frequency );
+//    Radio.SetMaxPayloadLength( MODEM_LORA, rxBeaconSetupParams->BeaconSize );
+
+//    // Check the RX continuous mode
+//    if( rxBeaconSetupParams->RxTime != 0 )
+//    {
+//        rxContinuous = false;
+//    }
+
+//    // Get region specific datarate
+//    datarate = rxBeaconSetupParams->Datarates[rxBeaconSetupParams->BeaconDatarate];
+
+//    // Setup radio
+//    Radio.SetRxConfig( MODEM_LORA, rxBeaconSetupParams->BeaconChannelBW, datarate,
+//                       1, 0, 10, rxBeaconSetupParams->SymbolTimeout, true, rxBeaconSetupParams->BeaconSize, false, 0, 0, false, rxContinuous );
+
+//    Radio.Rx( rxBeaconSetupParams->RxTime );
+//}

@@ -47,7 +47,7 @@
   /* Includes ------------------------------------------------------------------*/
 
 #include "sht20.h"
-
+#include "timeServer.h"
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -62,7 +62,7 @@
 #ifdef USE_SHT
 static int i=0,j=0;
 I2C_HandleTypeDef I2cHandle1;
-
+extern bool debug_flags;
 /* I2C TIMING Register define when I2C clock source is SYSCLK */
 /* I2C TIMING is calculated in case of the I2C Clock source is the SYSCLK = 32 MHz */
 #define I2C_TIMING    0x10A13E56 /* 100 kHz with analog Filter ON, Rise Time 400ns, Fall Time 100ns */ 
@@ -115,14 +115,12 @@ float SHT20_RH(void)
 	  uint8_t txdata[1]={0xf5};//Humidity measurement
 		uint8_t rxdata[2];
 		uint16_t AD_code;
-		uint16_t sum1=0;
-		uint16_t sum2=0;
 		float hum;
 
+		uint32_t currentTime = TimerGetCurrentTime();
 		while(HAL_I2C_Master_Transmit(&I2cHandle1,0x80,txdata,1,1000) != HAL_OK)
     {
-		    sum1++;
-				if(sum1>=500)
+			  if(TimerGetElapsedTime(currentTime) >= 1000)
 				{
 					break;
 				}
@@ -130,10 +128,10 @@ float SHT20_RH(void)
         {}
     }
 
+		currentTime = TimerGetCurrentTime();
 		while(HAL_I2C_Master_Receive(&I2cHandle1,0x81,rxdata,2,1000) != HAL_OK)
     {
-		    sum2++;
-				if(sum2>=3000)     //The minimum time required for humidity conversion, the timeout jumps out of the loop
+			  if(TimerGetElapsedTime(currentTime) >= 1000)
 				{
 					break;
 				}
@@ -152,20 +150,19 @@ float SHT20_RH(void)
   if(hum<0.0)
 	{
 		i++;
-	if(i==2)
-	{
-	BSP_sht20_Init();
-  }
-	if(i==3)
-	{
-	NVIC_SystemReset();
-	}
+		if(i==2)
+		{
+			BSP_sht20_Init();
+		}
 	}
   else
 	{
 		i=0;
 	}
-  PPRINTF("Humidity =%f\r\n",hum);
+  if(debug_flags==1)
+	{	
+		PPRINTF("Humidity =%0.1f\r\n",hum);
+	}
 	return hum;
 }
 
@@ -174,26 +171,24 @@ float SHT20_RT(void)
 	  uint8_t txdata[1]={0xf3};//Temperature measurement
 		uint8_t rxdata[2];
 		uint16_t AD_code;
-		uint16_t sum1=0;
-		uint16_t sum2=0;
 		float tem;
-	
+
+	  uint32_t currentTime = TimerGetCurrentTime();		
 		while(HAL_I2C_Master_Transmit(&I2cHandle1,0x80,txdata,1,1000) != HAL_OK)
     {
-			  sum1++;
-				if(sum1>=500)
+			  if(TimerGetElapsedTime(currentTime) >= 1000)
 				{
 					break;
 				}
         if(HAL_I2C_GetError(&I2cHandle1) != HAL_I2C_ERROR_AF)
         {}
     }
-		
+
+		currentTime = TimerGetCurrentTime();		
 		while(HAL_I2C_Master_Receive(&I2cHandle1,0x81,rxdata,2,1000) != HAL_OK)
     {
-			  sum2++;
-				if(sum2>=3000)       // The minimum time required for temperature conversion, the timeout jumps out of the loop
-				{
+			  if(TimerGetElapsedTime(currentTime) >= 1000)
+				{		
 					break;
 				}
         if(HAL_I2C_GetError(&I2cHandle1) != HAL_I2C_ERROR_AF)
@@ -206,21 +201,21 @@ float SHT20_RT(void)
 	if((tem<-40.0)||(tem>125.0))
 	{
 		j++;
-	if(j==2)
-	{
-	BSP_sht20_Init();		
-	}
-	if(j==3)
-	{
-	NVIC_SystemReset();
-	}
+		if(j==2)
+		{
+			BSP_sht20_Init();		
+		}
 	}
 	else
 	{
 		j=0;
 	}
-	PPRINTF("Temperature =%f\r\n",tem);
-  return tem;
+  if(debug_flags==1)
+	{		
+		PPRINTF("\r\n");		
+		PPRINTF("Temperature =%0.1f\r\n",tem);
+	}
+	return tem;	
 }
 #endif
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/

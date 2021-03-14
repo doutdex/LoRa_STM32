@@ -1,49 +1,42 @@
-/*
- / _____)             _              | |
-( (____  _____ ____ _| |_ _____  ____| |__
- \____ \| ___ |    (_   _) ___ |/ ___)  _ \
- _____) ) ____| | | || |_| ____( (___| | | |
-(______/|_____)_|_|_| \__)_____)\____)_| |_|
-    (C)2013 Semtech
-
-Description: Generic SX1276 driver implementation
-
-License: Revised BSD License, see LICENSE.TXT file include in the project
-
-Maintainer: Miguel Luis, Gregory Cristian and Wael Guibene
-*/
- /*******************************************************************************
+/*!
+ * \file      sx1276.c
+ *
+ * \brief     SX1276 driver implementation
+ *
+ * \copyright Revised BSD License, see section \ref LICENSE.
+ *
+ * \code
+ *                ______                              _
+ *               / _____)             _              | |
+ *              ( (____  _____ ____ _| |_ _____  ____| |__
+ *               \____ \| ___ |    (_   _) ___ |/ ___)  _ \
+ *               _____) ) ____| | | || |_| ____( (___| | | |
+ *              (______/|_____)_|_|_| \__)_____)\____)_| |_|
+ *              (C)2013-2017 Semtech
+ *
+ * \endcode
+ *
+ * \author    Miguel Luis ( Semtech )
+ *
+ * \author    Gregory Cristian ( Semtech )
+ *
+ * \author    Wael Guibene ( Semtech )
+ */
+/**
+  ******************************************************************************
   * @file    sx1276.c
   * @author  MCD Application Team
-  * @version V1.0.1
-  * @date    08-September-2017
   * @brief   driver sx1276
   ******************************************************************************
   * @attention
   *
-  * <h2><center>&copy; COPYRIGHT(c) 2017 STMicroelectronics</center></h2>
+  * <h2><center>&copy; Copyright (c) 2018 STMicroelectronics.
+  * All rights reserved.</center></h2>
   *
-  * Redistribution and use in source and binary forms, with or without modification,
-  * are permitted provided that the following conditions are met:
-  *   1. Redistributions of source code must retain the above copyright notice,
-  *      this list of conditions and the following disclaimer.
-  *   2. Redistributions in binary form must reproduce the above copyright notice,
-  *      this list of conditions and the following disclaimer in the documentation
-  *      and/or other materials provided with the distribution.
-  *   3. Neither the name of STMicroelectronics nor the names of its contributors
-  *      may be used to endorse or promote products derived from this software
-  *      without specific prior written permission.
-  *
-  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  * This software component is licensed by ST under BSD 3-Clause license,
+  * the "License"; You may not use this file except in compliance with the
+  * License. You may obtain a copy of the License at:
+  *                        opensource.org/licenses/BSD-3-Clause
   *
   ******************************************************************************
   */
@@ -54,7 +47,11 @@ Maintainer: Miguel Luis, Gregory Cristian and Wael Guibene
 #include "sx1276.h"
 #include "timeServer.h"
 #include "delay.h"
+#include "LoRaMac.h"
 
+extern bool ser_ack;
+extern bool address_flags;
+extern bool debug_flags;
 /*
  * Local types definition
  */
@@ -302,7 +299,7 @@ bool SX1276IsChannelFree( RadioModems_t modem, uint32_t freq, int16_t rssiThresh
     bool status = true;
     int16_t rssi = 0;
     uint32_t carrierSenseTime = 0;
-
+		
     SX1276SetModem( modem );
 
     SX1276SetChannel( freq );
@@ -890,6 +887,10 @@ void SX1276SetSleep( void )
     TimerStop( &TxTimeoutTimer );
 
     SX1276SetOpMode( RF_OPMODE_SLEEP );
+	
+    // Disable TCXO radio is in SLEEP mode
+    LoRaBoardCallbacks->SX1276BoardSetXO( RESET );
+	
     SX1276.Settings.State = RF_IDLE;
 }
 
@@ -905,6 +906,7 @@ void SX1276SetStby( void )
 void SX1276SetRx( uint32_t timeout )
 {
     bool rxContinuous = false;
+    TimerStop( &TxTimeoutTimer );
 
     switch( SX1276.Settings.Modem )
     {
@@ -1049,11 +1051,8 @@ void SX1276SetRx( uint32_t timeout )
     {
         SX1276SetOpMode( RF_OPMODE_RECEIVER );
 
-        if( rxContinuous == false )
-        {
-            TimerSetValue( &RxTimeoutSyncWord, SX1276.Settings.Fsk.RxSingleTimeout );
-            TimerStart( &RxTimeoutSyncWord );
-        }
+        TimerSetValue( &RxTimeoutSyncWord, SX1276.Settings.Fsk.RxSingleTimeout );
+        TimerStart( &RxTimeoutSyncWord );
     }
     else
     {
@@ -1070,6 +1069,8 @@ void SX1276SetRx( uint32_t timeout )
 
 void SX1276SetTx( uint32_t timeout )
 {
+    TimerStop( &RxTimeoutTimer );
+	
     TimerSetValue( &TxTimeoutTimer, timeout );
 
     switch( SX1276.Settings.Modem )
@@ -1557,7 +1558,6 @@ void SX1276OnDio0Irq( void )
                 break;
             case MODEM_LORA:
                 {
-                    int8_t snr = 0;
 
                     // Clear Irq
                     SX1276Write( REG_LR_IRQFLAGS, RFLR_IRQFLAGS_RXDONE );
@@ -1581,31 +1581,21 @@ void SX1276OnDio0Irq( void )
                         break;
                     }
 
-                    SX1276.Settings.LoRaPacketHandler.SnrValue = SX1276Read( REG_LR_PKTSNRVALUE );
-                    if( SX1276.Settings.LoRaPacketHandler.SnrValue & 0x80 ) // The SNR sign bit is 1
-                    {
-                        // Invert and divide by 4
-                        snr = ( ( ~SX1276.Settings.LoRaPacketHandler.SnrValue + 1 ) & 0xFF ) >> 2;
-                        snr = -snr;
-                    }
-                    else
-                    {
-                        // Divide by 4
-                        snr = ( SX1276.Settings.LoRaPacketHandler.SnrValue & 0xFF ) >> 2;
-                    }
+                    // Returns SNR value [dB] rounded to the nearest integer value
+                    SX1276.Settings.LoRaPacketHandler.SnrValue = ( ( ( int8_t )SX1276Read( REG_LR_PKTSNRVALUE ) ) + 2 ) >> 2;
 
                     int16_t rssi = SX1276Read( REG_LR_PKTRSSIVALUE );
-                    if( snr < 0 )
+                    if( SX1276.Settings.LoRaPacketHandler.SnrValue < 0  )
                     {
                         if( SX1276.Settings.Channel > RF_MID_BAND_THRESH )
                         {
                             SX1276.Settings.LoRaPacketHandler.RssiValue = RSSI_OFFSET_HF + rssi + ( rssi >> 4 ) +
-                                                                          snr;
+                                                                          SX1276.Settings.LoRaPacketHandler.SnrValue;;
                         }
                         else
                         {
                             SX1276.Settings.LoRaPacketHandler.RssiValue = RSSI_OFFSET_LF + rssi + ( rssi >> 4 ) +
-                                                                          snr;
+                                                                          SX1276.Settings.LoRaPacketHandler.SnrValue;;
                         }
                     }
                     else
@@ -1633,7 +1623,25 @@ void SX1276OnDio0Irq( void )
                     if( ( RadioEvents != NULL ) && ( RadioEvents->RxDone != NULL ) )
                     {
                         RadioEvents->RxDone( RxTxBuffer, SX1276.Settings.LoRaPacketHandler.Size, SX1276.Settings.LoRaPacketHandler.RssiValue, SX1276.Settings.LoRaPacketHandler.SnrValue );
-                        PRINTF( "rxDone\n\r" );
+												if(address_flags==0)
+												{
+													if(debug_flags==1)
+												  {
+													TimerTime_t ts = TimerGetCurrentTime(); 
+													PPRINTF("[%lu]", ts); 
+													}
+													if(ser_ack==1)
+													{
+														PPRINTF("rxDone(ACK)\r\n" );
+														ser_ack=0;
+													}
+													else
+													{
+														PPRINTF("rxDone\r\n" );
+													}
+													PPRINTF("Rssi= %d\r\n",SX1276.Settings.LoRaPacketHandler.RssiValue);
+												}
+												address_flags=0;												
                     }
                 }
                 break;
@@ -1656,7 +1664,12 @@ void SX1276OnDio0Irq( void )
                 if( ( RadioEvents != NULL ) && ( RadioEvents->TxDone != NULL ) )
                 {
                     RadioEvents->TxDone( );
-                    PRINTF( "txDone\n\r" );
+									  if(debug_flags==1)
+									  {
+										TimerTime_t ts = TimerGetCurrentTime(); 
+										PPRINTF("[%lu]", ts); 
+										}											
+                    PPRINTF( "txDone\r\n" );
                 }
                 break;
             }
@@ -1674,6 +1687,9 @@ void SX1276OnDio1Irq( void )
             switch( SX1276.Settings.Modem )
             {
             case MODEM_FSK:
+                // Stop timer
+                TimerStop( &RxTimeoutSyncWord );
+
                 // FifoLevel interrupt
                 // Read received packet size
                 if( ( SX1276.Settings.FskPacketHandler.Size == 0 ) && ( SX1276.Settings.FskPacketHandler.NbBytes == 0 ) )
@@ -1688,10 +1704,17 @@ void SX1276OnDio1Irq( void )
                     }
                 }
 
-                if( ( SX1276.Settings.FskPacketHandler.Size - SX1276.Settings.FskPacketHandler.NbBytes ) > SX1276.Settings.FskPacketHandler.FifoThresh )
+                // ERRATA 3.1 - PayloadReady Set for 31.25ns if FIFO is Empty
+                //
+                //              When FifoLevel interrupt is used to offload the
+                //              FIFO, the microcontroller should  monitor  both
+                //              PayloadReady  and FifoLevel interrupts, and
+                //              read only (FifoThreshold-1) bytes off the FIFO
+                //              when FifoLevel fires
+                if( ( SX1276.Settings.FskPacketHandler.Size - SX1276.Settings.FskPacketHandler.NbBytes ) >= SX1276.Settings.FskPacketHandler.FifoThresh )
                 {
-                    SX1276ReadFifo( ( RxTxBuffer + SX1276.Settings.FskPacketHandler.NbBytes ), SX1276.Settings.FskPacketHandler.FifoThresh );
-                    SX1276.Settings.FskPacketHandler.NbBytes += SX1276.Settings.FskPacketHandler.FifoThresh;
+                    SX1276ReadFifo( ( RxTxBuffer + SX1276.Settings.FskPacketHandler.NbBytes ), SX1276.Settings.FskPacketHandler.FifoThresh -1);
+                    SX1276.Settings.FskPacketHandler.NbBytes += SX1276.Settings.FskPacketHandler.FifoThresh-1;
                 }
                 else
                 {
@@ -1709,7 +1732,12 @@ void SX1276OnDio1Irq( void )
                 if( ( RadioEvents != NULL ) && ( RadioEvents->RxTimeout != NULL ) )
                 {
                     RadioEvents->RxTimeout( );
-                    PRINTF( "rxTimeOut\n\r" );
+										if(debug_flags==1)
+									  {									
+										TimerTime_t ts = TimerGetCurrentTime(); 
+										PPRINTF("[%lu]", ts); 	
+										}											
+                    PPRINTF( "rxTimeOut\r\n" );
                 }
                 break;
             default:

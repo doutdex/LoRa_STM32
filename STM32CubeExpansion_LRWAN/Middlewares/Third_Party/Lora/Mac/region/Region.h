@@ -45,7 +45,7 @@
  *              - #define REGION_KR920
  *              - #define REGION_IN865
  *              - #define REGION_US915
- *              - #define REGION_US915_HYBRID
+ *              - #define REGION_RU864
  *
  * \{
  */
@@ -72,7 +72,8 @@
  * IN865        | SF12 - BW125
  * KR920        | SF12 - BW125
  * US915        | SF10 - BW125
- * US915_HYBRID | SF10 - BW125
+ * RU864        | SF12 - BW125
+ * KZ865        | SF12 - BW125
  */
 #define DR_0                                        0
 
@@ -88,7 +89,8 @@
  * IN865        | SF11 - BW125
  * KR920        | SF11 - BW125
  * US915        | SF9  - BW125
- * US915_HYBRID | SF9  - BW125
+ * RU864        | SF11 - BW125
+ * KZ865        | SF11 - BW125
  */
 #define DR_1                                        1
 
@@ -104,7 +106,8 @@
  * IN865        | SF10 - BW125
  * KR920        | SF10 - BW125
  * US915        | SF8  - BW125
- * US915_HYBRID | SF8  - BW125
+ * RU864        | SF10 - BW125
+ * KZ865        | SF10 - BW125
  */
 #define DR_2                                        2
 
@@ -120,7 +123,8 @@
  * IN865        | SF9  - BW125
  * KR920        | SF9  - BW125
  * US915        | SF7  - BW125
- * US915_HYBRID | SF7  - BW125
+ * RU864        | SF9  - BW125
+ * KZ865        | SF9  - BW125
  */
 #define DR_3                                        3
 
@@ -136,7 +140,8 @@
  * IN865        | SF8  - BW125
  * KR920        | SF8  - BW125
  * US915        | SF8  - BW500
- * US915_HYBRID | SF8  - BW500
+ * RU864        | SF8  - BW125
+ * KZ865        | SF8  - BW125
  */
 #define DR_4                                        4
 
@@ -152,7 +157,8 @@
  * IN865        | SF7  - BW125
  * KR920        | SF7  - BW125
  * US915        | RFU
- * US915_HYBRID | RFU
+ * RU864        | SF7  - BW125
+ * KZ865        | SF7  - BW125
  */
 #define DR_5                                        5
 
@@ -168,7 +174,8 @@
  * IN865        | SF7  - BW250
  * KR920        | RFU
  * US915        | RFU
- * US915_HYBRID | RFU
+ * RU864        | SF7  - BW250
+ * KZ865        | SF7  - BW250
  */
 #define DR_6                                        6
 
@@ -184,7 +191,8 @@
  * IN865        | FSK
  * KR920        | RFU
  * US915        | RFU
- * US915_HYBRID | RFU
+ * RU864        | FSK
+ * KZ865        | FSK
  */
 #define DR_7                                        7
 
@@ -200,7 +208,8 @@
  * IN865        | RFU
  * KR920        | RFU
  * US915        | SF12 - BW500
- * US915_HYBRID | SF12 - BW500
+ * RU864        | RFU
+ * KZ865        | RFU
  */
 #define DR_8                                        8
 
@@ -216,7 +225,8 @@
  * IN865        | RFU
  * KR920        | RFU
  * US915        | SF11 - BW500
- * US915_HYBRID | SF11 - BW500
+ * RU864        | RFU
+ * KZ865        | RFU
  */
 #define DR_9                                        9
 
@@ -232,7 +242,8 @@
  * IN865        | RFU
  * KR920        | RFU
  * US915        | SF10 - BW500
- * US915_HYBRID | SF10 - BW500
+ * RU864        | RFU
+ * KZ865        | RFU
  */
 #define DR_10                                       10
 
@@ -248,7 +259,8 @@
  * IN865        | RFU
  * KR920        | RFU
  * US915        | SF9  - BW500
- * US915_HYBRID | SF9  - BW500
+ * RU864        | RFU
+ * KZ865        | RFU
  */
 #define DR_11                                       11
 
@@ -264,7 +276,8 @@
  * IN865        | RFU
  * KR920        | RFU
  * US915        | SF8  - BW500
- * US915_HYBRID | SF8  - BW500
+ * RU864        | RFU
+ * KZ865        | RFU
  */
 #define DR_12                                       12
 
@@ -280,7 +293,8 @@
  * IN865        | RFU
  * KR920        | RFU
  * US915        | SF7  - BW500
- * US915_HYBRID | SF7  - BW500
+ * RU864        | RFU
+ * KZ865        | RFU
  */
 #define DR_13                                       13
 
@@ -296,7 +310,8 @@
  * IN865        | RFU
  * KR920        | RFU
  * US915        | RFU
- * US915_HYBRID | RFU
+ * RU864        | RFU
+ * KZ865        | RFU
  */
 #define DR_14                                       14
 
@@ -312,7 +327,8 @@
  * IN865        | RFU
  * KR920        | RFU
  * US915        | RFU
- * US915_HYBRID | RFU
+ * RU864        | RFU
+ * KZ865        | RFU
  */
 #define DR_15                                       15
 
@@ -330,7 +346,8 @@
  * IN865        | Max EIRP
  * KR920        | Max EIRP
  * US915        | Max ERP
- * US915_HYBRID | Max ERP
+ * RU864        | Max EIRP
+ * KZ865        | Max EIRP
  */
 #define TX_POWER_0                                  0
 
@@ -346,7 +363,8 @@
  * IN865        | Max EIRP - 2
  * KR920        | Max EIRP - 2
  * US915        | Max ERP - 2
- * US915_HYBRID | Max ERP - 2
+ * RU864        | Max EIRP - 2
+ * KZ865        | Max EIRP - 2
  */
 #define TX_POWER_1                                  1
 
@@ -362,7 +380,8 @@
  * IN865        | Max EIRP - 4
  * KR920        | Max EIRP - 4
  * US915        | Max ERP - 4
- * US915_HYBRID | Max ERP - 4
+ * RU864        | Max EIRP - 4
+ * KZ865        | Max EIRP - 4
  */
 #define TX_POWER_2                                  2
 
@@ -378,7 +397,8 @@
  * IN865        | Max EIRP - 6
  * KR920        | Max EIRP - 6
  * US915        | Max ERP - 6
- * US915_HYBRID | Max ERP - 6
+ * RU864        | Max EIRP - 6
+ * KZ865        | Max EIRP - 6
  */
 #define TX_POWER_3                                  3
 
@@ -394,7 +414,8 @@
  * IN865        | Max EIRP - 8
  * KR920        | Max EIRP - 8
  * US915        | Max ERP - 8
- * US915_HYBRID | Max ERP - 8
+ * RU864        | Max EIRP - 8
+ * KZ865        | Max EIRP - 8
  */
 #define TX_POWER_4                                  4
 
@@ -410,7 +431,8 @@
  * IN865        | Max EIRP - 10
  * KR920        | Max EIRP - 10
  * US915        | Max ERP - 10
- * US915_HYBRID | Max ERP - 10
+ * RU864        | Max EIRP - 10
+ * KZ865        | Max EIRP - 10
  */
 #define TX_POWER_5                                  5
 
@@ -426,7 +448,8 @@
  * IN865        | Max EIRP - 12
  * KR920        | Max EIRP - 12
  * US915        | Max ERP - 12
- * US915_HYBRID | Max ERP - 12
+ * RU864        | Max EIRP - 12
+ * KZ865        | Max EIRP - 12
  */
 #define TX_POWER_6                                  6
 
@@ -442,7 +465,8 @@
  * IN865        | Max EIRP - 14
  * KR920        | Max EIRP - 14
  * US915        | Max ERP - 14
- * US915_HYBRID | Max ERP - 14
+ * RU864        | Max EIRP - 14
+ * KZ865        | Max EIRP - 14
  */
 #define TX_POWER_7                                  7
 
@@ -458,7 +482,8 @@
  * IN865        | Max EIRP - 16
  * KR920        | -
  * US915        | Max ERP - 16
- * US915_HYBRID | Max ERP -16
+ * RU864        | -
+ * KZ865        | -
  */
 #define TX_POWER_8                                  8
 
@@ -474,7 +499,8 @@
  * IN865        | Max EIRP - 18
  * KR920        | -
  * US915        | Max ERP - 16
- * US915_HYBRID | Max ERP - 16
+ * RU864        | -
+ * KZ865        | -
  */
 #define TX_POWER_9                                  9
 
@@ -490,7 +516,8 @@
  * IN865        | Max EIRP - 20
  * KR920        | -
  * US915        | Max ERP - 10
- * US915_HYBRID | Max ERP - 10
+ * RU864        | -
+ * KZ865        | -
  */
 #define TX_POWER_10                                 10
 
@@ -526,6 +553,11 @@
  */
 typedef enum ePhyAttribute
 {
+		  /*!
+     * Frequency. It is available
+     * to perform a verification with RegionVerify().
+     */
+    PHY_FREQUENCY,	
     /*!
      * Minimum RX datarate.
      */
@@ -555,6 +587,10 @@ typedef enum ePhyAttribute
      */
     PHY_RX_DR,
     /*!
+     * Maximum TX power.
+     */
+    PHY_MAX_TX_POWER,
+    /*!
      * TX power.
      */
     PHY_TX_POWER,
@@ -562,6 +598,14 @@ typedef enum ePhyAttribute
      * Default TX power.
      */
     PHY_DEF_TX_POWER,
+    /*!
+     * Default ADR_ACK_LIMIT value.
+     */
+    PHY_DEF_ADR_ACK_LIMIT,
+    /*!
+     * Default ADR_ACK_DELAY value.
+     */
+    PHY_DEF_ADR_ACK_DELAY,
     /*!
      * Maximum payload possible.
      */
@@ -672,7 +716,10 @@ typedef enum eInitType
     /*!
      * Restores default channels only.
      */
-    INIT_TYPE_RESTORE
+    INIT_TYPE_RESTORE,
+	
+	  INIT_TYPE_REJOIN
+	
 }InitType_t;
 
 typedef enum eChannelsMask
@@ -763,6 +810,11 @@ typedef struct sSetBandTxDoneParams
  */
 typedef union uVerifyParams
 {
+	    /*!
+     * Channel frequency to verify
+     */
+    uint32_t Frequency;
+		
     /*!
      * TX power to verify.
      */
@@ -1488,5 +1540,6 @@ void RegionSetContinuousWave( LoRaMacRegion_t region, ContinuousWaveParams_t* co
 uint8_t RegionApplyDrOffset( LoRaMacRegion_t region, uint8_t downlinkDwellTime, int8_t dr, int8_t drOffset );
 
 /*! \} defgroup REGION */
+//void RegionRxBeaconSetup( LoRaMacRegion_t region, RxBeaconSetup_t* rxBeaconSetup, uint8_t* outDr );
 
 #endif // __REGION_H__

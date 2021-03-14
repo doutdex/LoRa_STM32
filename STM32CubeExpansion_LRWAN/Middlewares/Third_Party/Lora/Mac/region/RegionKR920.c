@@ -37,6 +37,10 @@ Maintainer: Miguel Luis ( Semtech ), Gregory Cristian ( Semtech ) and Daniel Jae
 // Definitions
 #define CHANNELS_MASK_SIZE              1
 
+extern LoRaMacParams_t LoRaMacParams;
+extern uint8_t payloadlens;
+extern bool DR_small;
+extern bool debug_flags;
 // Global attributes
 /*!
  * LoRaMAC channels
@@ -315,7 +319,7 @@ PhyParam_t RegionKR920GetPhyParam( GetPhyParams_t* getPhy )
         case PHY_NB_JOIN_TRIALS:
         case PHY_DEF_NB_JOIN_TRIALS:
         {
-            phyParam.Value = 48;
+            phyParam.Value = 18;
             break;
         }
         default:
@@ -369,6 +373,10 @@ void RegionKR920InitDefaults( InitType_t type )
         {
             // Restore channels default mask
             ChannelsMask[0] |= ChannelsDefaultMask[0];
+					
+            Channels[0] = ( ChannelParams_t ) KR920_LC1;
+            Channels[1] = ( ChannelParams_t ) KR920_LC2;
+            Channels[2] = ( ChannelParams_t ) KR920_LC3;
             break;
         }
         default:
@@ -406,7 +414,7 @@ bool RegionKR920Verify( VerifyParams_t* verify, PhyAttribute_t phyAttribute )
         }
         case PHY_NB_JOIN_TRIALS:
         {
-            if( verify->NbJoinTrials < 48 )
+            if( verify->NbJoinTrials < 18 )
             {
                 return false;
             }
@@ -572,7 +580,8 @@ bool RegionKR920RxConfig( RxConfigParams_t* rxConfig, int8_t* datarate )
     uint8_t maxPayload = 0;
     int8_t phyDr = 0;
     uint32_t frequency = rxConfig->Frequency;
-
+	  uint16_t rxfreq_a,rxfreq_b;
+	
     if( Radio.GetStatus( ) != RF_IDLE )
     {
         return false;
@@ -598,7 +607,19 @@ bool RegionKR920RxConfig( RxConfigParams_t* rxConfig, int8_t* datarate )
     Radio.SetRxConfig( MODEM_LORA, rxConfig->Bandwidth, phyDr, 1, 0, 8, rxConfig->WindowTimeout, false, 0, false, 0, 0, true, rxConfig->RxContinuous );
     maxPayload = MaxPayloadOfDatarateKR920[dr];
     Radio.SetMaxPayloadLength( MODEM_LORA, maxPayload + LORA_MAC_FRMPAYLOAD_OVERHEAD );
-//    PRINTF( "RX on freq %d Hz at DR %d\n\r", frequency, dr );
+
+		if(debug_flags==1)
+		{	
+			TimerTime_t ts = TimerGetCurrentTime(); 
+			PPRINTF("[%lu]", ts); 
+			PPRINTF( "RX on freq %d Hz at DR %d\r\n", frequency, dr );						
+		}
+		else
+		{
+			rxfreq_a=frequency/1000000;
+			rxfreq_b=(frequency%1000000)/1000;			
+			PPRINTF( "RX on freq %d.%d MHz at DR %d\r\n",rxfreq_a,rxfreq_b,dr );				
+		}
 
     *datarate = (uint8_t) dr;
     return true;
@@ -611,7 +632,8 @@ bool RegionKR920TxConfig( TxConfigParams_t* txConfig, int8_t* txPower, TimerTime
     uint32_t bandwidth = GetBandwidth( txConfig->Datarate );
     float maxEIRP = GetMaxEIRP( Channels[txConfig->Channel].Frequency );
     int8_t phyTxPower = 0;
-
+	  uint16_t txfreq_a,txfreq_b;
+	
     // Take the minimum between the maxEIRP and txConfig->MaxEirp.
     // The value of txConfig->MaxEirp could have changed during runtime, e.g. due to a MAC command.
     maxEIRP = MIN( txConfig->MaxEirp, maxEIRP );
@@ -623,8 +645,19 @@ bool RegionKR920TxConfig( TxConfigParams_t* txConfig, int8_t* txPower, TimerTime
     Radio.SetChannel( Channels[txConfig->Channel].Frequency );
 
     Radio.SetTxConfig( MODEM_LORA, phyTxPower, 0, bandwidth, phyDr, 1, 8, false, true, 0, 0, false, 3000 );
-    PRINTF( "TX on freq %d Hz at DR %d\n\r", Channels[txConfig->Channel].Frequency, txConfig->Datarate );
-
+		if(debug_flags==1)
+		{		
+			TimerTime_t ts = TimerGetCurrentTime(); 
+			PPRINTF("[%lu]", ts); 	
+			PPRINTF( "TX on freq %d Hz at DR %d\r\n", Channels[txConfig->Channel].Frequency, txConfig->Datarate );			
+		}			
+		else
+		{
+			txfreq_a=Channels[txConfig->Channel].Frequency/1000000;
+			txfreq_b=(Channels[txConfig->Channel].Frequency%1000000)/1000;
+			PPRINTF( "TX on freq %d.%d MHz at DR %d\r\n",txfreq_a,txfreq_b,txConfig->Datarate );						
+    }
+		
     // Setup maximum payload lenght of the radio driver
     Radio.SetMaxPayloadLength( MODEM_LORA, txConfig->PktLen );
     // Get the time-on-air of the next tx frame
@@ -728,13 +761,19 @@ uint8_t RegionKR920LinkAdrReq( LinkAdrReqParams_t* linkAdrReq, int8_t* drOut, in
         // Update the channels mask
         ChannelsMask[0] = chMask;
     }
-
+		
+		 if(((linkAdrParams.Datarate==0)||(linkAdrParams.Datarate==1)||(linkAdrParams.Datarate==2))&&(payloadlens>=51))
+		{
+			linkAdrParams.Datarate=3;
+			DR_small=1;			
+		}	
+		
     // Update status variables
     *drOut = linkAdrParams.Datarate;
     *txPowOut = linkAdrParams.TxPower;
     *nbRepOut = linkAdrParams.NbRep;
     *nbBytesParsed = bytesProcessed;
-
+		
     return status;
 }
 
@@ -850,29 +889,29 @@ int8_t RegionKR920AlternateDr( AlternateDrParams_t* alternateDr )
 {
     int8_t datarate = 0;
 
-    if( ( alternateDr->NbTrials % 48 ) == 0 )
+    if( alternateDr->NbTrials <= 3 )
     {
-        datarate = DR_0;
+        datarate = DR_5;
     }
-    else if( ( alternateDr->NbTrials % 32 ) == 0 )
-    {
-        datarate = DR_1;
-    }
-    else if( ( alternateDr->NbTrials % 24 ) == 0 )
-    {
-        datarate = DR_2;
-    }
-    else if( ( alternateDr->NbTrials % 16 ) == 0 )
-    {
-        datarate = DR_3;
-    }
-    else if( ( alternateDr->NbTrials % 8 ) == 0 )
+    else if( alternateDr->NbTrials <= 6 )
     {
         datarate = DR_4;
     }
+    else if( alternateDr->NbTrials <= 9 )
+    {
+        datarate = DR_3;
+    }
+    else if( alternateDr->NbTrials <= 12 )
+    {
+        datarate = DR_2;
+    }
+    else if( alternateDr->NbTrials <= 15  )
+    {
+        datarate = DR_1;
+    }
     else
     {
-        datarate = DR_5;
+        datarate = DR_0;
     }
     return datarate;
 }
@@ -1067,3 +1106,21 @@ uint8_t RegionKR920ApplyDrOffset( uint8_t downlinkDwellTime, int8_t dr, int8_t d
     }
     return datarate;
 }
+
+//void RegionKR920RxBeaconSetup( RxBeaconSetup_t* rxBeaconSetup, uint8_t* outDr )
+//{
+//    RegionCommonRxBeaconSetupParams_t regionCommonRxBeaconSetup;
+
+//    regionCommonRxBeaconSetup.Datarates = DataratesKR920;
+//    regionCommonRxBeaconSetup.Frequency = rxBeaconSetup->Frequency;
+//    regionCommonRxBeaconSetup.BeaconSize = KR920_BEACON_SIZE;
+//    regionCommonRxBeaconSetup.BeaconDatarate = KR920_BEACON_CHANNEL_DR;
+//    regionCommonRxBeaconSetup.BeaconChannelBW = KR920_BEACON_CHANNEL_BW;
+//    regionCommonRxBeaconSetup.RxTime = rxBeaconSetup->RxTime;
+//    regionCommonRxBeaconSetup.SymbolTimeout = rxBeaconSetup->SymbolTimeout;
+
+//    RegionCommonRxBeaconSetup( &regionCommonRxBeaconSetup );
+
+//    // Store downlink datarate
+//    *outDr = KR920_BEACON_CHANNEL_DR;
+//}

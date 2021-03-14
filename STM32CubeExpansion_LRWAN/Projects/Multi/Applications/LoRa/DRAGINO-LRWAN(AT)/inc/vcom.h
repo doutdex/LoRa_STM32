@@ -118,10 +118,11 @@ void vcom_IRQHandler(void);
 * @return None
 */
 void vcom_DMA_TX_IRQHandler(void);
-
-void vcom_init_uart1(void);
-void ULT_uart_IRQHandler(void);
-
+void uart1_IoInit(void);
+void uart1_init_uart1(void);
+void tfmini_uart_IRQHandler(void);
+void uart1_IoDeInit(void);
+void at_tfmini_data_receive(uint8_t rxdatatemp[],uint16_t delayvalue);
 #if 1
 #define PPRINTF(...)     do{ } while( 0!= TraceSend(__VA_ARGS__) ) //Polling Mode
 

@@ -1607,7 +1607,11 @@ typedef enum eLoRaMacStatus
      * Service not started - the specified region is not supported
      * or not activated with preprocessor definitions.
      */
-    LORAMAC_STATUS_REGION_NOT_SUPPORTED
+    LORAMAC_STATUS_REGION_NOT_SUPPORTED,
+		
+	  LORAMAC_STATUS_PARAMETER_NOT_in_Range,
+		
+	  LORAMAC_STATUS_PARAMETER_is_used	
 }LoRaMacStatus_t;
 
 /*!
@@ -1654,7 +1658,9 @@ typedef enum eLoRaMacRegion_t
     /*!
      * North american band on 915MHz with a maximum of 16 channels
      */
-    LORAMAC_REGION_US915_HYBRID,
+    LORAMAC_REGION_RU864,
+
+		LORAMAC_REGION_KZ865,		
 }LoRaMacRegion_t;
 
 /*!

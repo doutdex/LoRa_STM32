@@ -1,21 +1,32 @@
-/*
- / _____)             _              | |
-( (____  _____ ____ _| |_ _____  ____| |__
- \____ \| ___ |    (_   _) ___ |/ ___)  _ \
- _____) ) ____| | | || |_| ____( (___| | | |
-(______/|_____)_|_|_| \__)_____)\____)_| |_|
-    (C)2013 Semtech
- ___ _____ _   ___ _  _____ ___  ___  ___ ___
-/ __|_   _/_\ / __| |/ / __/ _ \| _ \/ __| __|
-\__ \ | |/ _ \ (__| ' <| _| (_) |   / (__| _|
-|___/ |_/_/ \_\___|_|\_\_| \___/|_|_\\___|___|
-embedded.connectivity.solutions===============
-
-Description: LoRa MAC region EU868 implementation
-
-License: Revised BSD License, see LICENSE.TXT file include in the project
-
-Maintainer: Miguel Luis ( Semtech ), Gregory Cristian ( Semtech ) and Daniel Jaeckle ( STACKFORCE )
+/*!
+ * \file      RegionEU868.c
+ *
+ * \brief     Region implementation for EU868
+ *
+ * \copyright Revised BSD License, see section \ref LICENSE.
+ *
+ * \code
+ *                ______                              _
+ *               / _____)             _              | |
+ *              ( (____  _____ ____ _| |_ _____  ____| |__
+ *               \____ \| ___ |    (_   _) ___ |/ ___)  _ \
+ *               _____) ) ____| | | || |_| ____( (___| | | |
+ *              (______/|_____)_|_|_| \__)_____)\____)_| |_|
+ *              (C)2013-2017 Semtech
+ *
+ *               ___ _____ _   ___ _  _____ ___  ___  ___ ___
+ *              / __|_   _/_\ / __| |/ / __/ _ \| _ \/ __| __|
+ *              \__ \ | |/ _ \ (__| ' <| _| (_) |   / (__| _|
+ *              |___/ |_/_/ \_\___|_|\_\_| \___/|_|_\\___|___|
+ *              embedded.connectivity.solutions===============
+ *
+ * \endcode
+ *
+ * \author    Miguel Luis ( Semtech )
+ *
+ * \author    Gregory Cristian ( Semtech )
+ *
+ * \author    Daniel Jaeckle ( STACKFORCE )
 */
 #include <stdbool.h>
 #include <string.h>
@@ -37,6 +48,11 @@ Maintainer: Miguel Luis ( Semtech ), Gregory Cristian ( Semtech ) and Daniel Jae
 // Definitions
 #define CHANNELS_MASK_SIZE              1
 
+extern uint8_t joinrx2_dr;
+extern LoRaMacParams_t LoRaMacParams;
+extern uint8_t payloadlens;
+extern bool DR_small;
+extern bool debug_flags;
 // Global attributes
 /*!
  * LoRaMAC channels
@@ -53,6 +69,7 @@ static Band_t Bands[EU868_MAX_NB_BANDS] =
     EU868_BAND2,
     EU868_BAND3,
     EU868_BAND4,
+	  EU868_BAND5,
 };
 
 /*!
@@ -128,7 +145,7 @@ static bool VerifyTxFreq( uint32_t freq, uint8_t *band )
     }
     else if( ( freq >= 868700000 ) && ( freq <= 869200000 ) )
     {
-        *band = 2;
+        *band = 5;
     }
     else if( ( freq >= 869400000 ) && ( freq <= 869650000 ) )
     {
@@ -279,7 +296,14 @@ PhyParam_t RegionEU868GetPhyParam( GetPhyParams_t* getPhy )
         }
         case PHY_DEF_RX2_DR:
         {
-            phyParam.Value = EU868_RX_WND_2_DR;
+					  if(joinrx2_dr==0)
+						{
+							phyParam.Value = EU868_RX_WND_2_DR;
+						}
+						else
+						{
+							phyParam.Value = joinrx2_dr;
+						}
             break;
         }
         case PHY_CHANNELS_MASK:
@@ -321,7 +345,7 @@ PhyParam_t RegionEU868GetPhyParam( GetPhyParams_t* getPhy )
         case PHY_NB_JOIN_TRIALS:
         case PHY_DEF_NB_JOIN_TRIALS:
         {
-            phyParam.Value = 48;
+            phyParam.Value = 18;
             break;
         }
         default:
@@ -375,6 +399,10 @@ void RegionEU868InitDefaults( InitType_t type )
         {
             // Restore channels default mask
             ChannelsMask[0] |= ChannelsDefaultMask[0];
+					
+            Channels[0] = ( ChannelParams_t ) EU868_LC1;
+            Channels[1] = ( ChannelParams_t ) EU868_LC2;
+            Channels[2] = ( ChannelParams_t ) EU868_LC3;
             break;
         }
         default:
@@ -412,7 +440,7 @@ bool RegionEU868Verify( VerifyParams_t* verify, PhyAttribute_t phyAttribute )
         }
         case PHY_NB_JOIN_TRIALS:
         {
-            if( verify->NbJoinTrials < 48 )
+            if( verify->NbJoinTrials < 18 )
             {
                 return false;
             }
@@ -586,7 +614,8 @@ bool RegionEU868RxConfig( RxConfigParams_t* rxConfig, int8_t* datarate )
     uint8_t maxPayload = 0;
     int8_t phyDr = 0;
     uint32_t frequency = rxConfig->Frequency;
-
+	  uint16_t rxfreq_a,rxfreq_b;
+	
     if( Radio.GetStatus( ) != RF_IDLE )
     {
         return false;
@@ -631,7 +660,18 @@ bool RegionEU868RxConfig( RxConfigParams_t* rxConfig, int8_t* datarate )
 
     Radio.SetMaxPayloadLength( modem, maxPayload + LORA_MAC_FRMPAYLOAD_OVERHEAD );
 
-//		PRINTF( "RX on freq %d Hz at DR %d\n\r", frequency, dr );
+		if(debug_flags==1)
+		{	
+			TimerTime_t ts = TimerGetCurrentTime(); 
+			PPRINTF("[%lu]", ts); 
+			PPRINTF( "RX on freq %d Hz at DR %d\r\n", frequency, dr );						
+		}
+		else
+		{
+			rxfreq_a=frequency/1000000;
+			rxfreq_b=(frequency%1000000)/1000;			
+			PPRINTF( "RX on freq %d.%d MHz at DR %d\r\n",rxfreq_a,rxfreq_b,dr );				
+		}
 		
     *datarate = (uint8_t) dr;
     return true;
@@ -644,7 +684,8 @@ bool RegionEU868TxConfig( TxConfigParams_t* txConfig, int8_t* txPower, TimerTime
     int8_t txPowerLimited = LimitTxPower( txConfig->TxPower, Bands[Channels[txConfig->Channel].Band].TxMaxPower, txConfig->Datarate, ChannelsMask );
     uint32_t bandwidth = GetBandwidth( txConfig->Datarate );
     int8_t phyTxPower = 0;
-
+	  uint16_t txfreq_a,txfreq_b;
+	
     // Calculate physical TX power
     phyTxPower = RegionCommonComputeTxPower( txPowerLimited, txConfig->MaxEirp, txConfig->AntennaGain );
 
@@ -661,8 +702,19 @@ bool RegionEU868TxConfig( TxConfigParams_t* txConfig, int8_t* txPower, TimerTime
         modem = MODEM_LORA;
         Radio.SetTxConfig( modem, phyTxPower, 0, bandwidth, phyDr, 1, 8, false, true, 0, 0, false, 3000 );
     }
-    PRINTF( "TX on freq %d Hz at DR %d\n\r", Channels[txConfig->Channel].Frequency, txConfig->Datarate );
-
+		if(debug_flags==1)
+		{		
+			TimerTime_t ts = TimerGetCurrentTime(); 
+			PPRINTF("[%lu]", ts); 	
+			PPRINTF( "TX on freq %d Hz at DR %d\r\n", Channels[txConfig->Channel].Frequency, txConfig->Datarate );			
+		}			
+		else
+		{
+			txfreq_a=Channels[txConfig->Channel].Frequency/1000000;
+			txfreq_b=(Channels[txConfig->Channel].Frequency%1000000)/1000;
+			PPRINTF( "TX on freq %d.%d MHz at DR %d\r\n",txfreq_a,txfreq_b,txConfig->Datarate );						
+    }
+		
     // Setup maximum payload lenght of the radio driver
     Radio.SetMaxPayloadLength( modem, txConfig->PktLen );
     // Get the time-on-air of the next tx frame
@@ -766,13 +818,19 @@ uint8_t RegionEU868LinkAdrReq( LinkAdrReqParams_t* linkAdrReq, int8_t* drOut, in
         // Update the channels mask
         ChannelsMask[0] = chMask;
     }
-
+		
+		 if(((linkAdrParams.Datarate==0)||(linkAdrParams.Datarate==1)||(linkAdrParams.Datarate==2))&&(payloadlens>=51))
+		{
+			linkAdrParams.Datarate=3;
+			DR_small=1;			
+		}	
+		
     // Update status variables
     *drOut = linkAdrParams.Datarate;
     *txPowOut = linkAdrParams.TxPower;
     *nbRepOut = linkAdrParams.NbRep;
     *nbBytesParsed = bytesProcessed;
-
+		
     return status;
 }
 
@@ -889,29 +947,29 @@ int8_t RegionEU868AlternateDr( AlternateDrParams_t* alternateDr )
 {
     int8_t datarate = 0;
 
-    if( ( alternateDr->NbTrials % 48 ) == 0 )
+    if( alternateDr->NbTrials <= 3 )
     {
-        datarate = DR_0;
+        datarate = DR_5;
     }
-    else if( ( alternateDr->NbTrials % 32 ) == 0 )
-    {
-        datarate = DR_1;
-    }
-    else if( ( alternateDr->NbTrials % 24 ) == 0 )
-    {
-        datarate = DR_2;
-    }
-    else if( ( alternateDr->NbTrials % 16 ) == 0 )
-    {
-        datarate = DR_3;
-    }
-    else if( ( alternateDr->NbTrials % 8 ) == 0 )
+    else if( alternateDr->NbTrials <= 6 )
     {
         datarate = DR_4;
     }
+    else if( alternateDr->NbTrials <= 9 )
+    {
+        datarate = DR_3;
+    }
+    else if( alternateDr->NbTrials <= 12 )
+    {
+        datarate = DR_2;
+    }
+    else if( alternateDr->NbTrials <= 15  )
+    {
+        datarate = DR_1;
+    }
     else
     {
-        datarate = DR_5;
+        datarate = DR_0;
     }
     return datarate;
 }
@@ -1098,3 +1156,21 @@ uint8_t RegionEU868ApplyDrOffset( uint8_t downlinkDwellTime, int8_t dr, int8_t d
     }
     return datarate;
 }
+
+//void RegionEU868RxBeaconSetup( RxBeaconSetup_t* rxBeaconSetup, uint8_t* outDr )
+//{
+//    RegionCommonRxBeaconSetupParams_t regionCommonRxBeaconSetup;
+
+//    regionCommonRxBeaconSetup.Datarates = DataratesEU868;
+//    regionCommonRxBeaconSetup.Frequency = rxBeaconSetup->Frequency;
+//    regionCommonRxBeaconSetup.BeaconSize = EU868_BEACON_SIZE;
+//    regionCommonRxBeaconSetup.BeaconDatarate = EU868_BEACON_CHANNEL_DR;
+//    regionCommonRxBeaconSetup.BeaconChannelBW = EU868_BEACON_CHANNEL_BW;
+//    regionCommonRxBeaconSetup.RxTime = rxBeaconSetup->RxTime;
+//    regionCommonRxBeaconSetup.SymbolTimeout = rxBeaconSetup->SymbolTimeout;
+
+//    RegionCommonRxBeaconSetup( &regionCommonRxBeaconSetup );
+
+//    // Store downlink datarate
+//    *outDr = EU868_BEACON_CHANNEL_DR;
+//}

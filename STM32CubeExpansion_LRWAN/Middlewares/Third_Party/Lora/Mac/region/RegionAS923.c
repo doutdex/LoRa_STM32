@@ -36,7 +36,12 @@ Maintainer: Miguel Luis ( Semtech ), Gregory Cristian ( Semtech ) and Daniel Jae
 #include "lora.h"
 // Definitions
 #define CHANNELS_MASK_SIZE              1
-
+	
+extern LoRaMacParams_t LoRaMacParams;
+extern uint8_t payloadlens;
+extern bool DR_small;
+extern uint8_t dwelltime;
+extern bool debug_flags;
 // Global attributes
 /*!
  * LoRaMAC channels
@@ -189,7 +194,14 @@ PhyParam_t RegionAS923GetPhyParam( GetPhyParams_t* getPhy )
         }
         case PHY_DEF_TX_DR:
         {
-            phyParam.Value = AS923_DEFAULT_DATARATE;
+					  if(dwelltime==0)
+						{
+                phyParam.Value = AS923_TX_MIN_DATARATE;
+            }
+            else
+						{
+								phyParam.Value = AS923_DEFAULT_DATARATE;
+						}
             break;
         }
         case PHY_NEXT_LOWER_TX_DR:
@@ -310,12 +322,26 @@ PhyParam_t RegionAS923GetPhyParam( GetPhyParams_t* getPhy )
         }
         case PHY_DEF_UPLINK_DWELL_TIME:
         {
+					  if(dwelltime==1)
+						{
             phyParam.Value = AS923_DEFAULT_UPLINK_DWELL_TIME;
+						}
+						else
+						{
+							phyParam.Value = 0;
+						}
             break;
         }
         case PHY_DEF_DOWNLINK_DWELL_TIME:
         {
+					  if(dwelltime==1)
+						{
             phyParam.Value = AS923_DEFAULT_DOWNLINK_DWELL_TIME;
+						}
+						else	
+						{							
+							phyParam.Value = 0;
+						}
             break;
         }
         case PHY_DEF_MAX_EIRP:
@@ -384,6 +410,9 @@ void RegionAS923InitDefaults( InitType_t type )
         {
             // Restore channels default mask
             ChannelsMask[0] |= ChannelsDefaultMask[0];
+					
+            Channels[0] = ( ChannelParams_t ) AS923_LC1;
+            Channels[1] = ( ChannelParams_t ) AS923_LC2;
             break;
         }
         default:
@@ -614,7 +643,8 @@ bool RegionAS923RxConfig( RxConfigParams_t* rxConfig, int8_t* datarate )
     uint8_t maxPayload = 0;
     int8_t phyDr = 0;
     uint32_t frequency = rxConfig->Frequency;
-
+	  uint16_t rxfreq_a,rxfreq_b;
+	
     if( Radio.GetStatus( ) != RF_IDLE )
     {
         return false;
@@ -659,7 +689,20 @@ bool RegionAS923RxConfig( RxConfigParams_t* rxConfig, int8_t* datarate )
     }
 
     Radio.SetMaxPayloadLength( modem, maxPayload + LORA_MAC_FRMPAYLOAD_OVERHEAD );
-//    PRINTF( "RX on freq %d Hz at DR %d\n\r", frequency, dr );
+
+		if(debug_flags==1)
+		{	
+			TimerTime_t ts = TimerGetCurrentTime(); 
+			PPRINTF("[%lu]", ts); 
+			PPRINTF( "RX on freq %d Hz at DR %d\r\n", frequency, dr );						
+		}
+		else
+		{
+			rxfreq_a=frequency/1000000;
+			rxfreq_b=(frequency%1000000)/1000;			
+			PPRINTF( "RX on freq %d.%d MHz at DR %d\r\n",rxfreq_a,rxfreq_b,dr );				
+		}
+		
 
     *datarate = (uint8_t) dr;
     return true;
@@ -672,10 +715,11 @@ bool RegionAS923TxConfig( TxConfigParams_t* txConfig, int8_t* txPower, TimerTime
     int8_t txPowerLimited = LimitTxPower( txConfig->TxPower, Bands[Channels[txConfig->Channel].Band].TxMaxPower, txConfig->Datarate, ChannelsMask );
     uint32_t bandwidth = GetBandwidth( txConfig->Datarate );
     int8_t phyTxPower = 0;
-
+	  uint16_t txfreq_a,txfreq_b;
+	
     // Calculate physical TX power
     phyTxPower = RegionCommonComputeTxPower( txPowerLimited, txConfig->MaxEirp, txConfig->AntennaGain );
-
+	
     // Setup the radio frequency
     Radio.SetChannel( Channels[txConfig->Channel].Frequency );
 
@@ -689,7 +733,18 @@ bool RegionAS923TxConfig( TxConfigParams_t* txConfig, int8_t* txPower, TimerTime
         modem = MODEM_LORA;
         Radio.SetTxConfig( modem, phyTxPower, 0, bandwidth, phyDr, 1, 8, false, true, 0, 0, false, 3000 );
     }
-    PRINTF( "TX on freq %d Hz at DR %d\n\r", Channels[txConfig->Channel].Frequency, txConfig->Datarate );
+		if(debug_flags==1)
+		{		
+			TimerTime_t ts = TimerGetCurrentTime(); 
+			PPRINTF("[%lu]", ts); 	
+			PPRINTF( "TX on freq %d Hz at DR %d\r\n", Channels[txConfig->Channel].Frequency, txConfig->Datarate );			
+		}			
+		else
+		{
+			txfreq_a=Channels[txConfig->Channel].Frequency/1000000;
+			txfreq_b=(Channels[txConfig->Channel].Frequency%1000000)/1000;
+			PPRINTF( "TX on freq %d.%d MHz at DR %d\r\n",txfreq_a,txfreq_b,txConfig->Datarate );						
+    }
     // Setup maximum payload lenght of the radio driver
     Radio.SetMaxPayloadLength( modem, txConfig->PktLen );
     // Get the time-on-air of the next tx frame
@@ -708,8 +763,8 @@ uint8_t RegionAS923LinkAdrReq( LinkAdrReqParams_t* linkAdrReq, int8_t* drOut, in
     uint16_t chMask = 0;
     GetPhyParams_t getPhy;
     PhyParam_t phyParam;
-    RegionCommonLinkAdrReqVerifyParams_t linkAdrVerifyParams;
-
+    RegionCommonLinkAdrReqVerifyParams_t linkAdrVerifyParams;  
+	
     while( bytesProcessed < linkAdrReq->PayloadSize )
     {
         // Get ADR request parameters
@@ -793,13 +848,22 @@ uint8_t RegionAS923LinkAdrReq( LinkAdrReqParams_t* linkAdrReq, int8_t* drOut, in
         // Update the channels mask
         ChannelsMask[0] = chMask;
     }
-
+		
+		 if(((dwelltime==1)&&(payloadlens>11))||((dwelltime==0)&&(payloadlens>=51)))
+		 {
+				if((linkAdrParams.Datarate==0)||(linkAdrParams.Datarate==1)||(linkAdrParams.Datarate==2))
+				{
+					linkAdrParams.Datarate=3;
+					DR_small=1;	
+				}	
+		 }	
+	
     // Update status variables
     *drOut = linkAdrParams.Datarate;
     *txPowOut = linkAdrParams.TxPower;
     *nbRepOut = linkAdrParams.NbRep;
     *nbBytesParsed = bytesProcessed;
-
+		
     return status;
 }
 
@@ -1116,3 +1180,21 @@ uint8_t RegionAS923ApplyDrOffset( uint8_t downlinkDwellTime, int8_t dr, int8_t d
     // Apply offset formula
     return MIN( DR_5, MAX( minDr, dr - EffectiveRx1DrOffsetAS923[drOffset] ) );
 }
+
+//void RegionAS923RxBeaconSetup( RxBeaconSetup_t* rxBeaconSetup, uint8_t* outDr )
+//{
+//    RegionCommonRxBeaconSetupParams_t regionCommonRxBeaconSetup;
+
+//    regionCommonRxBeaconSetup.Datarates = DataratesAS923;
+//    regionCommonRxBeaconSetup.Frequency = rxBeaconSetup->Frequency;
+//    regionCommonRxBeaconSetup.BeaconSize = AS923_BEACON_SIZE;
+//    regionCommonRxBeaconSetup.BeaconDatarate = AS923_BEACON_CHANNEL_DR;
+//    regionCommonRxBeaconSetup.BeaconChannelBW = AS923_BEACON_CHANNEL_BW;
+//    regionCommonRxBeaconSetup.RxTime = rxBeaconSetup->RxTime;
+//    regionCommonRxBeaconSetup.SymbolTimeout = rxBeaconSetup->SymbolTimeout;
+
+//    RegionCommonRxBeaconSetup( &regionCommonRxBeaconSetup );
+
+//    // Store downlink datarate
+//    *outDr = AS923_BEACON_CHANNEL_DR;
+//}

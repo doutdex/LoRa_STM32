@@ -46,6 +46,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "hw.h"
+#include "flash_eraseprogram.h"
 #include "low_power_manager.h"
 #include "lora.h"
 #include "bsp.h"
@@ -55,6 +56,9 @@
 #include "command.h"
 #include "at.h"
 #include "gpio_exti.h"
+#include "weight.h"
+#include "iwdg.h"
+#include "delay.h"
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -94,22 +98,48 @@ uint32_t ServerSetTDC;
 /*!
  * User application data buffer size
  */
-#define LORAWAN_APP_DATA_BUFF_SIZE                           64
+#define LORAWAN_APP_DATA_BUFF_SIZE                           256
 /*!
  * User application data
  */
 static uint8_t AppDataBuff[LORAWAN_APP_DATA_BUFF_SIZE];
-static uint8_t switch_status=0;
-
+uint8_t switch_status=0,normal_status=0;
+bool is_check_exit=0;
+bool rxpr_flags=0;
 int exti_flag=0;
+uint32_t COUNT;
 uint8_t TDC_flag=0;
+uint8_t join_flag=0;
+uint8_t atz_flags=0;
 uint16_t batteryLevel_mV;
+uint8_t payloadlens;
+bool is_time_to_IWDG_Refresh=0;
+bool joined_flags=0;
+bool is_there_data=0;
+bool is_time_to_rejoin=0;
+bool JoinReq_NbTrails_over=0;
+bool unconfirmed_downlink_data_ans_status=0,confirmed_downlink_data_ans_status=0;
+bool rejoin_status=0;
+bool rejoin_keep_status=0;
+bool MAC_COMMAND_ANS_status=0;
+bool uplink_data_status=0;
+uint8_t response_level=0;
+uint16_t REJOIN_TX_DUTYCYCLE=20;//min
+
 void send_exti(void);
+extern bool bh1750flags;
 extern uint8_t mode;
-extern uint16_t ult;
+extern uint8_t mode2_flag;
 extern __IO uint16_t AD_code2;
 extern __IO uint16_t AD_code3;
 extern uint8_t inmode;
+extern float GapValue;
+extern int32_t Weight_Shiwu;
+extern uint16_t power_time;
+extern bool rx2_flags;
+extern uint32_t LoRaMacState;
+extern uint8_t dwelltime;
+extern bool debug_flags;
 /*!
  * User application data structure
  */
@@ -132,13 +162,22 @@ static void Send( void );
 #if defined(LoRa_Sensor_Node)
 /* start the tx process*/
 static void LoraStartTx(TxEventType_t EventType);
+static void LoraStartjoin(TxEventType_t EventType);
+static void StartIWDGRefresh(TxEventType_t EventType);
+static void LoraStartRejoin(TxEventType_t EventType);
 
-static TimerEvent_t TxTimer;
+TimerEvent_t TxTimer;
+static TimerEvent_t TxTimer2;
+static TimerEvent_t IWDGRefreshTimer;//watch dog
+TimerEvent_t ReJoinTimer;
 
 /* tx timer callback function*/
 static void OnTxTimerEvent( void );
-
+static void OnTxTimerEvent2( void );
+static void OnIWDGRefreshTimeoutEvent(void);
+static void OnReJoinTimerEvent( void );
 #endif
+extern void printf_joinmessage(void);
 
 /* Private variables ---------------------------------------------------------*/
 /* load Main call backs structure*/
@@ -183,6 +222,12 @@ int main( void )
   /* USER CODE END 1 */
   CMD_Init();
 	
+	iwdg_init();		
+	
+ 	StartIWDGRefresh(TX_ON_EVENT); 
+
+	new_firmware_update();
+		
   /*Disbale Stand-by mode*/
   LPM_SetOffMode(LPM_APPLI_Id , LPM_Disable );
   
@@ -193,11 +238,138 @@ int main( void )
   {
 		/* Handle UART commands */
     CMD_Process();
+
+		if(joined_flags==1)
+		{
+			send_exti();
+
+			if(atz_flags==1)
+			{
+				DelayMs(500);
+				AppData.Buff[0]=0x11;
+	      AppData.BuffSize=1;
+	      AppData.Port = 2;
+	      LORA_send( &AppData, LORAWAN_UNCONFIRMED_MSG);
+				atz_flags++;
+			}
+		  else if((atz_flags==2)&&(( LoRaMacState & 0x00000001 ) != 0x00000001))
+			{
+				NVIC_SystemReset();
+			}		
+			
+			if(uplink_data_status==1)
+			{
+				Send();
+				uplink_data_status=0;
+			}	
+      
+      if((is_check_exit==1)&&(( LoRaMacState & 0x00000001 ) != 0x00000001)&&(( LoRaMacState & 0x00000010 ) != 0x00000010))
+			{
+				normal_status=HAL_GPIO_ReadPin(GPIO_EXTI_PORT,GPIO_EXTI_PIN);
+				if(switch_status!=normal_status)
+				{
+					switch_status=normal_status;
+					uplink_data_status=1;
+				}
+				is_check_exit=0;
+			}	
+			
+			#ifdef REGION_US915
+			if(MAC_COMMAND_ANS_status==1)
+			{		
+				if((( LoRaMacState & 0x00000001 ) != 0x00000001)&&(( LoRaMacState & 0x00000010 ) != 0x00000010))
+				{          
+					MibRequestConfirm_t mib;
+			
+			    mib.Type=MIB_CHANNELS_DATARATE;
+			    LoRaMacMibGetRequestConfirm(&mib);
+					
+				  if(mib.Param.ChannelsDatarate==0)
+			    {
+						AppData.Buff[0]=0x00;
+						AppData.BuffSize=1;
+						AppData.Port = 2;							
+	          LORA_send( &AppData, LORAWAN_UNCONFIRMED_MSG);
+						MAC_COMMAND_ANS_status=0;
+				  }
+				}		  
+			}
+			#elif defined( REGION_AS923 )	|| defined( REGION_AU915 )		
+			if((MAC_COMMAND_ANS_status==1)&&(dwelltime==1))
+			{		
+				if((( LoRaMacState & 0x00000001 ) != 0x00000001)&&(( LoRaMacState & 0x00000010 ) != 0x00000010))
+				{          
+					MibRequestConfirm_t mib;
+			
+			    mib.Type=MIB_CHANNELS_DATARATE;
+			    LoRaMacMibGetRequestConfirm(&mib);
+					
+				  if(mib.Param.ChannelsDatarate==0)
+			    {
+						AppData.Buff[0]=0x00;
+						AppData.BuffSize=1;
+						AppData.Port = 2;							
+	          LORA_send( &AppData, LORAWAN_UNCONFIRMED_MSG);
+						MAC_COMMAND_ANS_status=0;
+				  }
+				}		  
+			}		
+			#endif
 		
-		#if defined(LoRa_Sensor_Node)
-		send_exti();
-		#endif
+			if((MAC_COMMAND_ANS_status==1 && response_level==3) 
+					|| (unconfirmed_downlink_data_ans_status==1 && response_level==1 && is_there_data==1 ) 
+					|| (confirmed_downlink_data_ans_status==1 && response_level==2 && is_there_data==1 )
+					||(((MAC_COMMAND_ANS_status==1)||(confirmed_downlink_data_ans_status==1&&is_there_data==1))&&(response_level==4)))
+			{
+				if((( LoRaMacState & 0x00000001 ) != 0x00000001)&&(( LoRaMacState & 0x00000010 ) != 0x00000010))
+				{
+					MAC_COMMAND_ANS_status=0;
+					unconfirmed_downlink_data_ans_status=0;
+					confirmed_downlink_data_ans_status=0;
+					is_there_data=0;
+					AppData.Buff[0]=0x00;
+					AppData.BuffSize=1;
+					AppData.Port = 2;							
+					LORA_send( &AppData, LORAWAN_UNCONFIRMED_MSG);
+				}
+			}
 		
+		}
+		
+		if(is_time_to_rejoin==1)
+		{
+			if((( LoRaMacState & 0x00000001 ) != 0x00000001)&&(( LoRaMacState & 0x00000010 ) != 0x00000010))
+			{
+			  is_time_to_rejoin=0;
+			  LORA_Join();
+			}
+		}
+		
+		if(JoinReq_NbTrails_over==1)
+		{
+			JoinReq_NbTrails_over=0;
+			
+			rejoin_keep_status=1;
+			
+			if(REJOIN_TX_DUTYCYCLE>0)
+			{
+			  LoraStartRejoin(TX_ON_EVENT);
+			}
+		}
+		
+		if(rejoin_status==1)
+		{
+			rejoin_keep_status=1;
+			TimerStop(&TxTimer);
+			LORA_Join();
+		}
+		
+		if(is_time_to_IWDG_Refresh==1)
+		{
+			IWDG_Refresh();			
+			is_time_to_IWDG_Refresh=0;
+		}				
+						
     DISABLE_IRQ( );
     /*
      * if an interrupt has occurred after DISABLE_IRQ, it is kept pending
@@ -216,12 +388,27 @@ int main( void )
 
 static void LORA_HasJoined( void )
 {
-  AT_PRINTF("JOINED\n\r");
+	rx2_flags=1;
 
+	Read_Config();
+	
+	joined_flags=1;
+	
+  AT_PRINTF("JOINED\r\n");
+
+	rejoin_keep_status=0;
+	
+	if((lora_config_otaa_get() == LORA_ENABLE ? 1 : 0))
+	{
+		printf_joinmessage();
+	}		
+	
+	TimerStop(&ReJoinTimer);	
+	
   LORA_RequestClass( LORAWAN_DEFAULT_CLASS );
 	
 	#if defined(LoRa_Sensor_Node) /*LSN50 Preprocessor compile swicth:hw_conf.h*/
-	LoraStartTx( TX_ON_TIMER);		
+	LoraStartjoin( TX_ON_TIMER);	
 	#endif
 	
 	#if defined(AT_Data_Send)     /*LoRa ST Module*/
@@ -232,12 +419,13 @@ static void LORA_HasJoined( void )
 static void Send( void )
 {
   sensor_t sensor_data; 
+	is_there_data=0;		
   if ( LORA_JoinStatus () != LORA_SET)
   {
     /*Not joined, try again later*/
     return;
   }
-
+	
 	BSP_sensor_Read( &sensor_data );
 	
 	#if defined(LoRa_Sensor_Node)
@@ -245,107 +433,202 @@ static void Send( void )
 	uint32_t i = 0;
 
   AppData.Port = lora_config_application_port_get();
-	
-	HW_GetBatteryLevel( );
 
   if(mode==1)
 	{		
-	AppData.Buff[i++] =(batteryLevel_mV>>8);       //level of battery in mV
-	AppData.Buff[i++] =batteryLevel_mV & 0xFF;
+		AppData.Buff[i++] =(batteryLevel_mV>>8);       //level of battery in mV
+		AppData.Buff[i++] =batteryLevel_mV & 0xFF;
 	
-	AppData.Buff[i++]=(int)(sensor_data.temp1*10)>>8;     //DS18B20
-  AppData.Buff[i++]=(int)(sensor_data.temp1*10);
+		AppData.Buff[i++]=(int)(sensor_data.temp1*10)>>8;     //DS18B20
+		AppData.Buff[i++]=(int)(sensor_data.temp1*10);
 	
-  AppData.Buff[i++] =(int)(sensor_data.oil)>>8;          //oil float
-	AppData.Buff[i++] =(int)sensor_data.oil;
+		AppData.Buff[i++] =(int)(sensor_data.oil)>>8;          //oil float
+		AppData.Buff[i++] =(int)sensor_data.oil;
+
+		if(exti_flag==1)
+		{
+			AppData.Buff[i++]=(switch_status<<7)|(sensor_data.in1<<1)|0x01;
+			exti_flag=0;
+		}
+		else
+		{
+			switch_status=HAL_GPIO_ReadPin(GPIO_EXTI_PORT,GPIO_EXTI_PIN);							
+			AppData.Buff[i++]=(switch_status<<7)|(sensor_data.in1<<1);
+		}
 	
-	switch_status=HAL_GPIO_ReadPin(GPIO_EXTI_PORT,GPIO_EXTI_PIN);
-		
-	if(exti_flag==1)
-	{
-		AppData.Buff[i++]=(switch_status<<7)|(sensor_data.in1<<1)|0x01;
-		exti_flag=0;
-	}
-	else
-	{
-		AppData.Buff[i++]=(switch_status<<7)|(sensor_data.in1<<1);
-	}
-	
-	#if defined USE_SHT
-	
-	AppData.Buff[i++] =(int)(sensor_data.temp_sht*10)>>8;      
-	AppData.Buff[i++] =(int)(sensor_data.temp_sht*10);
-	AppData.Buff[i++] =(int)(sensor_data.hum_sht*10)>>8;   
-	AppData.Buff[i++] =(int)(sensor_data.hum_sht*10);
-	
-	#endif
-	
+		#if defined USE_SHT
+		if(bh1750flags==1)
+		{
+			AppData.Buff[i++] =(int)(sensor_data.illuminance)>>8;      
+			AppData.Buff[i++] =(int)(sensor_data.illuminance);
+			AppData.Buff[i++] = 0x00;   
+			AppData.Buff[i++] = 0x00;				
+		}	
+		else
+		{
+			AppData.Buff[i++] =(int)(sensor_data.temp_sht*10)>>8;      
+			AppData.Buff[i++] =(int)(sensor_data.temp_sht*10);
+			AppData.Buff[i++] =(int)(sensor_data.hum_sht*10)>>8;   
+			AppData.Buff[i++] =(int)(sensor_data.hum_sht*10);
+		}
+		#endif
 	}
 	
 	else if(mode==2)
 	{
-	AppData.Buff[i++] =(batteryLevel_mV>>8);       //level of battery in mV
-	AppData.Buff[i++] =batteryLevel_mV & 0xFF;
+		AppData.Buff[i++] =(batteryLevel_mV>>8);       //level of battery in mV
+		AppData.Buff[i++] =batteryLevel_mV & 0xFF;
 	
-	AppData.Buff[i++]=(int)(sensor_data.temp1*10)>>8;     //DS18B20
-  AppData.Buff[i++]=(int)(sensor_data.temp1*10);
+		AppData.Buff[i++]=(int)(sensor_data.temp1*10)>>8;     //DS18B20
+		AppData.Buff[i++]=(int)(sensor_data.temp1*10);
 	
-  AppData.Buff[i++] =(int)(sensor_data.oil)>>8;          //oil float
-	AppData.Buff[i++] =(int)sensor_data.oil;
-	
-	switch_status=HAL_GPIO_ReadPin(GPIO_EXTI_PORT,GPIO_EXTI_PIN);
-		
-	if(exti_flag==1)
-	{
-		AppData.Buff[i++]=(switch_status<<7)|(sensor_data.in1<<1)|0x01|0x04;
-		exti_flag=0;
-	}
-	else
-	{
-		AppData.Buff[i++]=(switch_status<<7)|(sensor_data.in1<<1)|0x04;
-	}
+		AppData.Buff[i++] =(int)(sensor_data.oil)>>8;          //oil float
+		AppData.Buff[i++] =(int)sensor_data.oil;
 
-	AppData.Buff[i++]=(int)(ult)>>8;
-	AppData.Buff[i++]=(int)(ult);	
-	AppData.Buff[i++] = 0xFF; 
-	AppData.Buff[i++] = 0xFF;		
+		if(exti_flag==1)
+		{
+			AppData.Buff[i++]=(switch_status<<7)|(sensor_data.in1<<1)|0x01|0x04;
+			exti_flag=0;
+		}
+		else
+		{
+			switch_status=HAL_GPIO_ReadPin(GPIO_EXTI_PORT,GPIO_EXTI_PIN);							
+			AppData.Buff[i++]=(switch_status<<7)|(sensor_data.in1<<1)|0x04;
+		}
+
+		AppData.Buff[i++]=(sensor_data.distance_mm)>>8;
+		AppData.Buff[i++]=(sensor_data.distance_mm);	
+		if(mode2_flag==3)
+		{
+		  AppData.Buff[i++]=(sensor_data.distance_signal_strengh)>>8;
+		  AppData.Buff[i++]=(sensor_data.distance_signal_strengh);				
+		}
+		else
+		{
+			AppData.Buff[i++] =0xff; 
+			AppData.Buff[i++] =0xff;
+		}			
 	}
 	
 	else if(mode==3)
 	{
-
-  AppData.Buff[i++] =(int)(sensor_data.oil)>>8;          //oil float
-	AppData.Buff[i++] =(int)sensor_data.oil;
+		AppData.Buff[i++] =(int)(sensor_data.oil)>>8;          //oil float
+		AppData.Buff[i++] =(int)sensor_data.oil;
 	
-	AppData.Buff[i++] =(int)(sensor_data.ADC_1)>>8;     
-	AppData.Buff[i++] =(int)(sensor_data.ADC_1);
-	AppData.Buff[i++] =(int)(sensor_data.ADC_2)>>8; 
-	AppData.Buff[i++] =(int)(sensor_data.ADC_2);
+		AppData.Buff[i++] =(int)(sensor_data.ADC_1)>>8;     
+		AppData.Buff[i++] =(int)(sensor_data.ADC_1);
+		AppData.Buff[i++] =(int)(sensor_data.ADC_2)>>8; 
+		AppData.Buff[i++] =(int)(sensor_data.ADC_2);
 
-	switch_status=HAL_GPIO_ReadPin(GPIO_EXTI_PORT,GPIO_EXTI_PIN);
+		if(exti_flag==1)
+		{
+			AppData.Buff[i++]=(switch_status<<7)|(sensor_data.in1<<1)|0x01|0x08;
+			exti_flag=0;
+		}
+		else
+		{
+			switch_status=HAL_GPIO_ReadPin(GPIO_EXTI_PORT,GPIO_EXTI_PIN);							
+			AppData.Buff[i++]=(switch_status<<7)|(sensor_data.in1<<1)|0x08;
+		}
+	
+		#if defined USE_SHT
+		if(bh1750flags==1)
+		{
+			AppData.Buff[i++] =(int)(sensor_data.illuminance)>>8;      
+			AppData.Buff[i++] =(int)(sensor_data.illuminance);
+			AppData.Buff[i++] = 0x00;   
+			AppData.Buff[i++] = 0x00;				
+		}	
+		else
+		{
+			AppData.Buff[i++] =(int)(sensor_data.temp_sht*10)>>8;      
+			AppData.Buff[i++] =(int)(sensor_data.temp_sht*10);
+			AppData.Buff[i++] =(int)(sensor_data.hum_sht*10)>>8;   
+			AppData.Buff[i++] =(int)(sensor_data.hum_sht*10);
+			}
+		#endif
+	
+		AppData.Buff[i++] =(int)(batteryLevel_mV/100);	
+	}
+	
+  else if(mode==4)
+	{		
+		AppData.Buff[i++] =(batteryLevel_mV>>8);       //level of battery in mV
+		AppData.Buff[i++] =batteryLevel_mV & 0xFF;
+	
+		AppData.Buff[i++]=(int)(sensor_data.temp1*10)>>8;     //DS18B20
+		AppData.Buff[i++]=(int)(sensor_data.temp1*10);
+	
+		AppData.Buff[i++] =(int)(sensor_data.oil)>>8;          //oil float
+		AppData.Buff[i++] =(int)sensor_data.oil;
+
+		if(exti_flag==1)
+		{
+			AppData.Buff[i++]=(switch_status<<7)|(sensor_data.in1<<1)|0x01|0x0C;
+			exti_flag=0;
+		}
+		else
+		{
+			switch_status=HAL_GPIO_ReadPin(GPIO_EXTI_PORT,GPIO_EXTI_PIN);				
+			AppData.Buff[i++]=(switch_status<<7)|(sensor_data.in1<<1)|0x0C;
+		}
+
+		AppData.Buff[i++]=(int)(sensor_data.temp2*10)>>8;     //DS18B20
+		AppData.Buff[i++]=(int)(sensor_data.temp2*10);
+		AppData.Buff[i++]=(int)(sensor_data.temp3*10)>>8;     //DS18B20
+		AppData.Buff[i++]=(int)(sensor_data.temp3*10);
+	
+	}	
+	
+	else if(mode==5)
+	{
+		AppData.Buff[i++] =(batteryLevel_mV>>8);       //level of battery in mV
+		AppData.Buff[i++] =batteryLevel_mV & 0xFF;
+	
+		AppData.Buff[i++]=(int)(sensor_data.temp1*10)>>8;     //DS18B20
+		AppData.Buff[i++]=(int)(sensor_data.temp1*10);
+	
+		AppData.Buff[i++] =(int)(sensor_data.oil)>>8;          //oil float
+		AppData.Buff[i++] =(int)sensor_data.oil;
+
+		if(exti_flag==1)
+		{
+			AppData.Buff[i++]=(switch_status<<7)|(sensor_data.in1<<1)|0x01|0x10;
+			exti_flag=0;
+		}
+		else
+		{
+			switch_status=HAL_GPIO_ReadPin(GPIO_EXTI_PORT,GPIO_EXTI_PIN);							
+			AppData.Buff[i++]=(switch_status<<7)|(sensor_data.in1<<1)|0x10;
+		}
+
+		AppData.Buff[i++]=(int)(Weight_Shiwu)>>8;
+		AppData.Buff[i++]=(int)(Weight_Shiwu);	
+		AppData.Buff[i++] = 0xFF; 
+		AppData.Buff[i++] = 0xFF;		
+	}
+	
+	else if(mode==6)
+	{	
+		AppData.Buff[i++] =(batteryLevel_mV>>8);       //level of battery in mV
+		AppData.Buff[i++] =batteryLevel_mV & 0xFF;
 		
-	if(exti_flag==1)
-	{
-		AppData.Buff[i++]=(switch_status<<7)|(sensor_data.in1<<1)|0x01|0x08;
-		exti_flag=0;
+		AppData.Buff[i++]=(int)(sensor_data.temp1*10)>>8;     //DS18B20
+		AppData.Buff[i++]=(int)(sensor_data.temp1*10);
+	
+		AppData.Buff[i++] =(int)(sensor_data.oil)>>8;          //oil float
+		AppData.Buff[i++] =(int)sensor_data.oil;
+
+		AppData.Buff[i++]=(sensor_data.in1<<1)|0x14;
+		
+		AppData.Buff[i++] = (int)(COUNT)>>24;
+		AppData.Buff[i++] =	(int)(COUNT)>>16;	
+		AppData.Buff[i++] = (int)(COUNT)>>8;
+		AppData.Buff[i++] =	(int)(COUNT);  	
 	}
-	else
-	{
-		AppData.Buff[i++]=(switch_status<<7)|(sensor_data.in1<<1)|0x08;
-	}
 	
-	#if defined USE_SHT
-	
-	AppData.Buff[i++] =(int)(sensor_data.temp_sht*10)>>8;      
-	AppData.Buff[i++] =(int)(sensor_data.temp_sht*10);
-	AppData.Buff[i++] =(int)(sensor_data.hum_sht*10)>>8;   
-	AppData.Buff[i++] =(int)(sensor_data.hum_sht*10);
-	
-	#endif
-	
-	AppData.Buff[i++] =(int)(batteryLevel_mV/100);	
-	}
 	AppData.BuffSize = i;
+	payloadlens=i;
   LORA_send( &AppData, lora_config_reqack_get());
 	#endif
 	
@@ -354,108 +637,351 @@ static void Send( void )
 
 static void LORA_RxData( lora_AppData_t *AppData )
 {
+	is_there_data=1;
+		
   set_at_receive(AppData->Port, AppData->Buff, AppData->BuffSize);
-	AT_PRINTF("Receive data\n\r");
-	AT_PRINTF("%d:",AppData->Port);
-	 for (int i = 0; i < AppData->BuffSize; i++)
-  {
-    AT_PRINTF("%02x", AppData->Buff[i]);
-  }
-	AT_PRINTF("\n\r");
 	
- switch(AppData->Buff[0] & 0xff)
-      {		
-				case 1:
-				{
-					if( AppData->BuffSize == 4 )
-					{
-					  ServerSetTDC=( AppData->Buff[1]<<16 | AppData->Buff[2]<<8 | AppData->Buff[3] );//S
+	switch(AppData->Buff[0] & 0xff)
+  {		
+	  case 0x01:   
+	  {
+		  if( AppData->BuffSize == 4 )  //---->AT+TDC
+			{
+			  ServerSetTDC=( AppData->Buff[1]<<16 | AppData->Buff[2]<<8 | AppData->Buff[3] );//S
 					
-						if(ServerSetTDC<6)
-						{
-							PRINTF("TDC setting must be more than 6S\n\r");
-		          APP_TX_DUTYCYCLE=6000;							
-						}
-						else
-						{
-					    TDC_flag=1;
-			        APP_TX_DUTYCYCLE=ServerSetTDC*1000;
-						}
-					}
-					break;
+				if(ServerSetTDC<6)
+				{
+		      APP_TX_DUTYCYCLE=6000;							
 				}
-				
-			case 4:
-			{
-				if( AppData->BuffSize == 2 )
-					{
-					  if(AppData->Buff[1]==0xFF)
-					  {
-					    NVIC_SystemReset();
-					  }
-				  }
-					break;
+				else
+				{
+				  TDC_flag=1;
+			    APP_TX_DUTYCYCLE=ServerSetTDC*1000;
+			  }
+				rxpr_flags=1;							
 			}
-			case 5:
+		  break;
+		}
+				
+		case 0x04:  
+		{
+			if( AppData->BuffSize == 2 )
 			{
-				if( AppData->BuffSize == 4 )
-					{
-					  if((AppData->Buff[1]==0x00)&&(AppData->Buff[2]==0x00)&&(AppData->Buff[3]==0x01))
-					  {
-							lora_config_reqack_set(LORAWAN_CONFIRMED_MSG);
-							Store_Config();
-					  }
-						else if((AppData->Buff[1]==0x00)&&(AppData->Buff[2]==0x00)&&(AppData->Buff[3]==0x00))
-						{
-							lora_config_reqack_set(LORAWAN_UNCONFIRMED_MSG);
-							Store_Config();
-						}
-				  }
-					break;
-			}	
-      case 6:
-      {
-				if( AppData->BuffSize == 4 )
-					{
-					  if((AppData->Buff[1]==0x00)&&(AppData->Buff[2]==0x00)&&(AppData->Buff[3]==0x00))
-					  {
-						 GPIO_EXTI_IoDeInit();
-						 inmode=0;
-						 Store_Config();
-					  }
-						else if((AppData->Buff[1]==0x00)&&(AppData->Buff[2]==0x00)&&(AppData->Buff[3]==0x01))
-						{
-						GPIO_EXTI_RISING_FALLINGInit();
-					  inmode=1;
-						Store_Config();
-						}
-						else if((AppData->Buff[1]==0x00)&&(AppData->Buff[2]==0x00)&&(AppData->Buff[3]==0x02))
-						{
-						GPIO_EXTI_FALLINGInit();
-					  inmode=2;
-						Store_Config();
-						}
-						else if((AppData->Buff[1]==0x00)&&(AppData->Buff[2]==0x00)&&(AppData->Buff[3]==0x03))
-						{
-						GPIO_EXTI_RISINGInit();
-					  inmode=3;
-						Store_Config();
-						}						
-				  }
-					break;	
+				if(AppData->Buff[1]==0xFF)  //---->ATZ
+			  {
+					atz_flags=1;
+					rxpr_flags=1;		
+				}
+				else if(AppData->Buff[1]==0xFE)  //---->AT+FDR
+				{			
+					FLASH_erase(0x8018F80);//page 799					
+				  FLASH_program_on_addr(0x8018F80,0x12);	
+          FLASH_erase(FLASH_USER_START_ADDR_CONFIG);//Page800 					
+					atz_flags=1;						
+					rxpr_flags=1;								
+				}
+			}
+			break;
+	  }
+		
+		case 0x05:
+		{
+			if( AppData->BuffSize == 2 )   
+			{
+				if(AppData->Buff[1]==0x01)    //---->AT+CFM=1
+				{
+					lora_config_reqack_set(LORAWAN_CONFIRMED_MSG);
+					Store_Config();
+					rxpr_flags=1;	
+				}
+			  else if(AppData->Buff[1]==0x00)  //---->AT+CFM=0
+				{
+					lora_config_reqack_set(LORAWAN_UNCONFIRMED_MSG);
+					Store_Config();
+					rxpr_flags=1;	
+				}					
+		  }
+			break;
+	  }	
+		
+    case 0x06:
+    {
+			if( AppData->BuffSize == 4 )
+			{
+			  if((AppData->Buff[1]==0x00)&&(AppData->Buff[2]==0x00)&&(AppData->Buff[3]==0x00))   //---->AT+INTMOD=0
+				{
+					GPIO_EXTI_IoDeInit();
+					inmode=0;
+					Store_Config();
+					rxpr_flags=1;		
+				}
+				else if((AppData->Buff[1]==0x00)&&(AppData->Buff[2]==0x00)&&(AppData->Buff[3]==0x01))    //---->AT+INTMOD=1
+				{
+				  GPIO_EXTI_RISING_FALLINGInit();
+					inmode=1;
+				  Store_Config();
+				  rxpr_flags=1;		
+				}
+				else if((AppData->Buff[1]==0x00)&&(AppData->Buff[2]==0x00)&&(AppData->Buff[3]==0x02))    //---->AT+INTMOD=2
+				{
+					GPIO_EXTI_FALLINGInit();
+					inmode=2;
+					Store_Config();
+					rxpr_flags=1;								
+				} 
+				else if((AppData->Buff[1]==0x00)&&(AppData->Buff[2]==0x00)&&(AppData->Buff[3]==0x03))    //---->AT+INTMOD=3
+				{
+					GPIO_EXTI_RISINGInit();
+					inmode=3;
+				  Store_Config();
+					rxpr_flags=1;								
+				}							
+			}
+			break;	
+		}		
+		
+		case 0x07:
+		{
+			if( AppData->BuffSize == 3 )
+			{	
+			  power_time=(AppData->Buff[1]<<8) | AppData->Buff[2];  //---->AT+5VT
+				Store_Config();
+			  rxpr_flags=1;							
+			}
+			break;									
+		}
+		
+    case 0x08:			
+		{
+			if(mode==5)
+			{
+				if((AppData->BuffSize == 2 )&&(AppData->Buff[1]==0x01))   //---->AT+WEIGRE
+				{	
+				  weightreset();
+				  rxpr_flags=1;							
+				}
+				else if((AppData->BuffSize == 4 )&&(AppData->Buff[1]==0x02))  //---->AT+WEIGAP
+				{
+				  GapValue=(float)((AppData->Buff[2]<<8 | AppData->Buff[3])/10.0);
+					Store_Config();					
+					rxpr_flags=1;							
+				}
+			}
+			break;			
+	  }		
+		
+		case 0x0A:
+		{
+			if( AppData->BuffSize == 2 )         
+			{	
+				if((AppData->Buff[1]>=0x01)&&(AppData->Buff[1]<=0x06))    //---->AT+MOD
+				{
+					mode=AppData->Buff[1];
+					Store_Config();
+					atz_flags=1;						
+					rxpr_flags=1;	
+				}						 
 			}				
-				default:
-					break;
-			}	
+			break;
+		}
+		
+    case 0x20:			
+		{
+			if( AppData->BuffSize == 2 )
+			{		
+				if((AppData->Buff[1]==0x00)||(AppData->Buff[1]==0x01))    
+				{
+					if(AppData->Buff[1]==0x01)       //---->AT+NJM=1
+					{
+						lora_config_otaa_set(LORA_ENABLE);
+					}
+					else                             //---->AT+NJM=0
+					{
+						lora_config_otaa_set(LORA_DISABLE);							
+					}
+					Store_Config();
+					atz_flags=1;
+					rxpr_flags=1;		
+				}						 
+			}
+			break;				
+		}	
+		
+		case 0x21:
+		{
+		  if( (AppData->BuffSize == 2) && (AppData->Buff[1]<=4) )
+			{
+				response_level=( AppData->Buff[1] );//0~4					//---->AT+RPL
+				Store_Config();
+				rxpr_flags=1;							
+			}
+			break;
+		}		
+		
+    case 0x22:			
+		{
+			MibRequestConfirm_t mib;
+			if(( AppData->BuffSize == 2 )&&(AppData->Buff[1]==0x01))   //---->AT+ADR=1
+			{		
+				mib.Type = MIB_ADR;
+				mib.Param.AdrEnable =AppData->Buff[1];
+				LoRaMacMibSetRequestConfirm( &mib );					
+				Store_Config();
+				rxpr_flags=1;								
+			}
+			else if((AppData->BuffSize == 4 )&&(AppData->Buff[1]==0x00))   //---->AT+ADR=0
+			{
+				mib.Type = MIB_ADR;					
+				mib.Param.AdrEnable = AppData->Buff[1];
+				LoRaMacMibSetRequestConfirm( &mib );						
+				if(AppData->Buff[2]!=0xff)                //---->AT+DR
+				{
+				 uint8_t datarate=AppData->Buff[2];
+				 #if defined( REGION_AS923 )
+				     if(datarate<8)
+						 {
+								lora_config_tx_datarate_set(AppData->Buff[2]);							
+						 }
+				 #elif defined( REGION_AU915 )
+						 if((datarate!=7)&&(datarate<14))
+						 {
+								lora_config_tx_datarate_set(AppData->Buff[2]);							
+						 }
+				 #elif defined( REGION_CN470 )
+					   if(datarate<6)	
+						 {
+								lora_config_tx_datarate_set(AppData->Buff[2]);							
+						 }
+				 #elif defined( REGION_CN779 )
+						 if(datarate<8)
+						 {
+								lora_config_tx_datarate_set(AppData->Buff[2]);							
+						 }
+         #elif defined( REGION_EU433 )
+						 if(datarate<8)
+						 {
+								lora_config_tx_datarate_set(AppData->Buff[2]);							
+						 }
+				 #elif defined( REGION_IN865 )
+						 if(datarate<8)
+						 {
+								lora_config_tx_datarate_set(AppData->Buff[2]);							
+						 }
+				 #elif defined( REGION_EU868 )
+						 if(datarate<8)
+						 {
+								lora_config_tx_datarate_set(AppData->Buff[2]);							
+						 }
+				 #elif defined( REGION_KR920 )
+						 if(datarate<6)
+						 {
+								lora_config_tx_datarate_set(AppData->Buff[2]);							
+						 }
+				 #elif defined( REGION_US915 )
+						 if(((datarate<5)||(datarate>7))&&(datarate<14))
+						 {
+								lora_config_tx_datarate_set(AppData->Buff[2]);							
+						 }
+				 #elif defined( REGION_RU864 )
+						 if(datarate<8)
+						 {
+								lora_config_tx_datarate_set(AppData->Buff[2]);							
+						 }
+				 #elif defined( REGION_KZ865 )
+						 if(datarate<8)
+						 {
+								lora_config_tx_datarate_set(AppData->Buff[2]);							
+						 }
+				 #endif
+								
+				}
+				if(AppData->Buff[3]!=0xff)                //---->AT+TXP
+				{
+					mib.Type = MIB_CHANNELS_TX_POWER;						
+					mib.Param.ChannelsTxPower=AppData->Buff[3];
+					LoRaMacMibSetRequestConfirm( &mib );							
+				}				
+				Store_Config();
+				rxpr_flags=1;									
+			 }
+			 break;				
+		}			
+		
+    case 0x23:			
+		{
+			if( AppData->BuffSize == 2 )
+			{		
+				lora_config_application_port_set(AppData->Buff[1]);    //---->AT+PORT
+				Store_Config();
+				rxpr_flags=1;							 
+			}
+			break;					
+		}	
+		
+    case 0x24:			
+	  {
+		  #if defined( REGION_US915 )	|| defined( REGION_AU915 ) ||	defined( REGION_CN470 ) 		
+			if( AppData->BuffSize == 2 )
+			{		
+			  if(AppData->Buff[1]<=0x0C)
+				{
+					customize_set8channel_set(AppData->Buff[1]);    //---->AT+CHE
+					Store_Config();		
+					rxpr_flags=1;		
+				}				
+			}
+		  #endif	
+			break;				
+	  }	
+		
+    case 0x25:			
+		{
+		 #if defined( REGION_AS923 )	|| defined( REGION_AU915 )
+		 if( AppData->BuffSize == 2 )
+		 {				
+			 if((AppData->Buff[1]==0x00)||(AppData->Buff[1]==0x01))   //---->AT+DWELLT
+			 {
+				 dwelltime=AppData->Buff[1];
+			 	 Store_Config();
+				 atz_flags=1;
+				 rxpr_flags=1;		
+			 }						
+		 }
+		 #endif	
+		 break;				
+		}	
+		
+		default:
+		break;
+	}	
+	
 	if(TDC_flag==1)
 	{
 		Store_Config();
 		TimerInit( &TxTimer, OnTxTimerEvent );
     TimerSetValue( &TxTimer,  APP_TX_DUTYCYCLE);		
     TimerStart( &TxTimer); 
+		TimerStart( &IWDGRefreshTimer);		
 		TDC_flag=0;
 	}	
-	
+
+	AT_PRINTF("\r\n");		
+	AT_PRINTF("Receive data\n\r");
+	if((AppData->BuffSize<=8)&&(rxpr_flags==1))
+	{		
+		AT_PRINTF("%d:",AppData->Port);		
+		for (int i = 0; i < AppData->BuffSize; i++)
+		{
+			AT_PRINTF("%02x ", AppData->Buff[i]);
+		}
+		AT_PRINTF("\n\r");
+	}
+	else
+	{
+		AT_PRINTF("BuffSize:%d,Run AT+RECVB=? to see detail\r\n",AppData->BuffSize);		
+		
+	}
+	rxpr_flags=0;	
 }
 
 #if defined(LoRa_Sensor_Node)
@@ -467,7 +993,14 @@ static void OnTxTimerEvent( void )
   /*Wait for next tx slot*/
   TimerStart( &TxTimer);
 
-	Send( );
+	if((exti_flag==1)&&(( LoRaMacState & 0x00000001 ) != 0x00000001)&&(( LoRaMacState & 0x00000010 ) != 0x00000010))
+	{
+
+	}
+	else if((exti_flag==0)&&(( LoRaMacState & 0x00000001 ) != 0x00000001)&&(( LoRaMacState & 0x00000010 ) != 0x00000010))
+	{	
+	  uplink_data_status=1;
+	}
 }
 
 static void LoraStartTx(TxEventType_t EventType)
@@ -478,6 +1011,73 @@ static void LoraStartTx(TxEventType_t EventType)
     TimerInit( &TxTimer, OnTxTimerEvent );
     TimerSetValue( &TxTimer,  APP_TX_DUTYCYCLE); 
     OnTxTimerEvent();
+  }
+}
+static void OnTxTimerEvent2( void )
+{
+	if(join_flag==0)
+	{
+		TimerSetValue( &TxTimer2,  500);
+	
+		/*Wait for next tx slot*/
+		TimerStart( &TxTimer2);
+		
+		join_flag++;
+	}
+	else if(join_flag==1)
+	{
+		LoraStartTx(TX_ON_TIMER);
+		join_flag++;
+	}
+}
+
+static void LoraStartjoin(TxEventType_t EventType)
+{
+  if (EventType == TX_ON_TIMER)
+  {
+    /* send everytime timer elapses */
+    TimerInit( &TxTimer2, OnTxTimerEvent2 );
+    TimerSetValue( &TxTimer2, 500); 
+	
+    OnTxTimerEvent2();
+  }
+}
+
+static void OnIWDGRefreshTimeoutEvent( void )
+{
+	TimerSetValue( &IWDGRefreshTimer,  18000);
+
+  TimerStart( &IWDGRefreshTimer);
+
+	is_time_to_IWDG_Refresh=1;
+}
+
+static void StartIWDGRefresh(TxEventType_t EventType)
+{
+  if (EventType == TX_ON_EVENT)
+  {
+    /* send everytime timer elapses */
+    TimerInit( &IWDGRefreshTimer, OnIWDGRefreshTimeoutEvent );
+    TimerSetValue( &IWDGRefreshTimer,  18000); 
+		TimerStart( &IWDGRefreshTimer);
+  }
+}
+
+static void OnReJoinTimerEvent( void )
+{
+	TimerStop( &ReJoinTimer);
+	
+	is_time_to_rejoin=1;
+}
+
+static void LoraStartRejoin(TxEventType_t EventType)
+{
+  if (EventType == TX_ON_EVENT)
+  {
+    /* send everytime timer elapses */
+    TimerInit( &ReJoinTimer, OnReJoinTimerEvent );
+    TimerSetValue( &ReJoinTimer,  REJOIN_TX_DUTYCYCLE*60000); 
+		TimerStart( &ReJoinTimer);
   }
 }
 #endif
@@ -498,7 +1098,30 @@ void send_exti(void)
 {
 	if(exti_flag==1)
 	{
-	 Send( );
+		 if(mode!=6)
+		 {
+			 is_check_exit=1;
+			 if((( LoRaMacState & 0x00000001 ) != 0x00000001) && (( LoRaMacState & 0x00000010 ) != 0x00000010))
+			 {
+				 uplink_data_status=1;
+			 }
+			 else if(inmode==1)
+			 {
+				 exti_flag=0;
+			 }
+		 }
+		 else
+		 {
+			if(debug_flags==1)
+			{
+				PPRINTF("COUNT is %d\r\n",COUNT);	
+			}
+      if((COUNT%30==0)&&(COUNT!=0))
+      {
+				IWDG_Refresh();				
+			}				 
+			exti_flag=0;			 
+		 }
 	}
 }
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
